@@ -1,5 +1,5 @@
 {
-  "name": "Copy of English Conversation Tutor",
+  "name": "English Conversation Tutor_v.1",
   "description": "An application to practice English conversation with an AI tutor. Users can choose a topic and engage in a spoken dialogue to improve their listening and speaking skills.",
   "requestFramePermissions": [
     "microphone"

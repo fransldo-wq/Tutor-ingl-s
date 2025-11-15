@@ -3,16 +3,10 @@ export enum Speaker {
   TUTOR = 'Tutor',
 }
 
-export interface Correction {
-  original: string;
-  corrected: string;
-  explanation: string;
-}
-
 export interface TranscriptEntry {
   speaker: Speaker;
   text: string;
-  correction?: Correction;
+  correction?: string;
 }
 
 export enum SessionStatus {

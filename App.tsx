@@ -1,6 +1,8 @@
+
+
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { GoogleGenAI, LiveSession, LiveServerMessage, Modality, Blob } from '@google/genai';
-import { Speaker, TranscriptEntry, SessionStatus, AppMode, Correction } from './types';
+import { GoogleGenAI, LiveSession, LiveServerMessage, Modality, Blob, Type } from '@google/genai';
+import { Speaker, TranscriptEntry, SessionStatus, AppMode } from './types';
 import { encode, decode, decodeAudioData } from './utils/audio';
 import { MicIcon, StopIcon, LoadingSpinner, SparklesIcon, PlayIcon } from './components/Icons';
 
@@ -9,66 +11,78 @@ const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
 const SCRIPT_PROCESSOR_BUFFER_SIZE = 4096;
 
-const TUTOR_SYSTEM_INSTRUCTION = `You are a world-class, native-speaking English language tutor. Your primary goal is to facilitate immersive language practice. You must be encouraging, patient, and highly expressive.
+const LISTENING_TOPICS = [
+    // Technology & Science
+    'a recent breakthrough in artificial intelligence',
+    'the ethical implications of gene editing',
+    'exploring the possibility of life on Mars',
+    'the impact of social media on society',
+    'a debate on renewable energy sources',
+    'the future of transportation, like self-driving cars',
+    'how quantum computing works',
 
-KEY RULES:
+    // Culture & Arts
+    'a review of a critically acclaimed film or TV series',
+    'the history of a specific music genre, like Jazz or Hip Hop',
+    'a discussion about a famous painting or artist',
+    'the experience of visiting a world-renowned museum',
+    'a conversation about the importance of literature',
+    'the process of writing a novel',
 
-- Always Speak in English. All tutor output must be in English.
-- Be Verbose: In Conversation Mode, your responses should be significantly longer (minimum 3-5 sentences) than a typical conversational partner's to maximize user listening practice.
-- Strictly Use Defined XML-like Tags for all output elements, which will enable the user's application to render them (e.g., highlighting corrections in yellow).
+    // Travel & Lifestyle
+    'planning a backpacking trip through Southeast Asia',
+    'the challenges of living as an expatriate',
+    'a story about an unexpected travel adventure',
+    'comparing city life versus country life',
+    'a discussion on minimalism and simple living',
+    'sharing a unique recipe and its cultural origin',
 
-I. CONVERSATION TUTOR MODE
+    // Personal & Professional Development
+    'a dialogue about effective public speaking techniques',
+    'the importance of emotional intelligence in the workplace',
+    'a debate on different learning styles',
+    'setting and achieving long-term career goals',
+    'a conversation about managing stress and preventing burnout',
+    'the benefits of learning a new language',
 
-The user will select a Topic (e.g., 'Travel Planning', 'Current Events', 'Cooking') and a Level (B1, B2, C1).
+    // Society & History
+    'a discussion about a pivotal moment in modern history',
+    'the challenges of urbanization in developing countries',
+    'a debate on the pros and cons of globalization',
+    'an interview with a community leader about local issues',
+    'a short story inspired by a historical event',
+    'exploring different cultural traditions around the world',
+];
 
-Tutor Response Format (Conversation)
-Your response must contain exactly two sections: <TUTOR_SPEECH> and optionally <CORRECTION>.
+const CONVERSATION_TUTOR_SYSTEM_INSTRUCTION = `You are a friendly and helpful English language tutor. The user is a {LEVEL} level English learner who wants to have a conversation about "{TOPIC}".
 
-<TUTOR_SPEECH>: This is your main conversational reply to the user's last statement.
-- Your reply must align with the selected topic and difficulty level.
-- Maintain the flow of the dialogue.
+Your primary goal is to keep the conversation flowing naturally. After the user speaks, you MUST follow this process in your response:
 
-<CORRECTION> (Mandatory if user made errors): If the user's last statement contained a grammatical, lexical, or phrasing error (if detected from transcribed input, assume typical errors), you must include this tag.
-- Structure: <CORRECTION>Original expression: "[User's phrase]". Correct expression: "[The grammatically correct, natural phrase]". Explanation: [Brief explanation of the error (e.g., tense, preposition, or more natural phrasing)].</CORRECTION>
-- This section should immediately follow <TUTOR_SPEECH>.
-- Goal: To provide immediate, constructive feedback that the user's app will display prominently (e.g., in yellow).
+1.  **Correction:** Analyze the user's previous statement for grammatical errors, awkward phrasing, or unnatural sentences. If you find any errors, your response MUST begin *exactly* with the phrase "Correction:" followed by the corrected version of the user's sentence.
+2.  **Reply Separator:** After the correction sentence, you MUST include the separator token "||".
+3.  **Reply:** After the separator, provide your natural, conversational reply.
 
-Example Start (First Turn):
-Upon receiving the topic "Travel Planning" and level "B2", your first response should be:
-<TUTOR_SPEECH>Hello! That's a great topic. At the B2 level, we can discuss travel in detail. So, tell me, if you could go anywhere in the world right now, where would you choose and why?</TUTOR_SPEECH>
+If there are no errors, just provide the conversational reply without the "Correction:" prefix or the "||" separator.
 
-II. LISTENING COMPREHENSION MODE
+Example 1 (with correction):
+User: "I goed to the store yesterday."
+Your response text: "Correction: I went to the store yesterday.||Oh, what did you buy?"
 
-The user will select the Level (B1, B2, C1) and the "Listening" mode.
+Example 2 (no correction):
+User: "I went to the store yesterday."
+Your response text: "Oh, what did you buy?"
 
-Listening Mode Process
-1. Generate a Scenario: On a random, engaging topic, create a realistic dialogue (approx. 200-300 words) appropriate for the selected level. The dialogue should feature exactly two distinct speakers to simulate a real conversation (e.g., Alice and Bob).
-   - Transcript Format: Use the format [Speaker Name]: [Dialogue Line].
-2. Generate Comprehension Questions: Following the transcript, generate 3-4 comprehension questions covering main ideas, details, and inferences, in multiple-choice format (A, B, C). Do not provide the answers.
+Keep your replies concise to encourage the user to speak more.`;
 
-Listening Response Format
-Your response must contain exactly two sections: <TRANSCRIPT> and <QUESTIONS>.
 
-<TRANSCRIPT>: Contains the full dialogue.
-- Example Format: [Alice]: That new café on Elm Street is fantastic! [Bob]: Oh really? I thought it was just okay. (Continue dialogue...)
+const LISTENING_SYSTEM_INSTRUCTION = `You are an AI assistant for English language learners. Your task is to generate a listening comprehension exercise.
 
-<QUESTIONS>: Contains the multiple-choice questions.
-- Example Format:
-1. What is Bob’s initial opinion of the café?
-   A. He believes it is fantastic.
-   B. He thinks it is just acceptable.
-   C. He hasn't been there yet.
-2. What specific item does Chris praise?
-   A. The coffee quality.
-   B. The location.
-   C. The pastries.
-
-Continue this pattern for all 3-4 questions.
-
-III. PRESENTATION
-Ensure all generated content is clean, well-structured, and highly readable, simulating an engaging and professional interface.
-
-BEGIN SESSION: The user will now provide the initial input (Topic/Level for Conversation, or "Listening" for Listening Comprehension Mode).`;
+Process:
+1.  On a random, engaging topic, create a realistic dialogue (approx. 200-300 words) appropriate for the selected level.
+2.  The dialogue MUST feature exactly two distinct speakers (e.g., Alice and Bob).
+3.  The dialogue text MUST be formatted with speaker tags, where each line of dialogue is prefixed with the speaker's name in brackets. Example: "[Alice]: Hi Bob, how are you? [Bob]: I'm doing great, thanks!".
+4.  After the dialogue, generate 3-4 multiple-choice comprehension questions (A, B, C) based on the dialogue. Do not provide the answers.
+`;
 
 
 function createPcmBlob(data: Float32Array): Blob {
@@ -81,21 +95,6 @@ function createPcmBlob(data: Float32Array): Blob {
         data: encode(new Uint8Array(int16.buffer)),
         mimeType: `audio/pcm;rate=${INPUT_SAMPLE_RATE}`,
     };
-}
-
-function parseCorrection(correctionText: string): Correction | null {
-    const originalMatch = correctionText.match(/Original expression: "(.*?)"/);
-    const correctedMatch = correctionText.match(/Correct expression: "(.*?)"/);
-    const explanationMatch = correctionText.match(/Explanation: (.*)/);
-
-    if (originalMatch && correctedMatch && explanationMatch) {
-        return {
-            original: originalMatch[1],
-            corrected: correctedMatch[1],
-            explanation: explanationMatch[1],
-        };
-    }
-    return null;
 }
 
 // --- UI Components ---
@@ -163,7 +162,7 @@ const ConversationControls: React.FC<ConversationControlsProps> = ({ status, top
                         {isConnecting ? (
                             <>
                                 <LoadingSpinner className="w-5 h-5" />
-                                <span>Connecting...</span>
+                                <span>Starting...</span>
                             </>
                         ) : (
                             <>
@@ -180,39 +179,66 @@ const ConversationControls: React.FC<ConversationControlsProps> = ({ status, top
 
 interface TranscriptViewProps {
     transcript: TranscriptEntry[];
+    isTutorReplying: boolean;
+    status: SessionStatus;
+    liveUserTranscript: string;
 }
 
-const TranscriptView: React.FC<TranscriptViewProps> = ({ transcript }) => {
+const TranscriptView: React.FC<TranscriptViewProps> = ({ transcript, isTutorReplying, status, liveUserTranscript }) => {
     const endOfMessagesRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [transcript]);
+    }, [transcript, isTutorReplying, liveUserTranscript]);
 
     return (
         <div className="flex-grow space-y-6 overflow-y-auto p-4 md:p-6">
-            {transcript.length === 0 && (
+            {transcript.length === 0 && !isTutorReplying && status !== SessionStatus.ACTIVE && status !== SessionStatus.CONNECTING && !liveUserTranscript && (
                 <div className="text-center text-slate-400 py-10">
                     <h2 className="text-2xl font-bold text-slate-200 mb-2">Welcome!</h2>
                     <p>Enter a topic, select a level, and click "Start" to begin your practice session.</p>
+                </div>
+            )}
+             {status === SessionStatus.ACTIVE && transcript.length === 0 && !isTutorReplying && !liveUserTranscript && (
+                 <div className="text-center text-slate-400 py-10 animate-pulse">
+                    <MicIcon className="w-12 h-12 mx-auto text-cyan-400 mb-4" />
+                    <h2 className="text-2xl font-bold text-slate-200 mb-2">Listening...</h2>
+                    <p>Please start by saying something about the topic.</p>
                 </div>
             )}
             {transcript.map((entry, index) => (
                 <div key={index} className={`flex items-start gap-4 ${entry.speaker === Speaker.USER ? 'flex-row-reverse' : 'flex-row'}`}>
                     <div className={`max-w-xl p-4 rounded-2xl shadow-md ${entry.speaker === Speaker.USER ? 'bg-blue-600 text-white rounded-br-none' : 'bg-slate-700 text-slate-200 rounded-bl-none'}`}>
                         <p className="font-bold mb-1">{entry.speaker}</p>
-                        <p className="whitespace-pre-wrap">{entry.text}</p>
                         {entry.speaker === Speaker.TUTOR && entry.correction && (
-                            <div className="mt-3 p-3 bg-yellow-500/10 border-l-4 border-yellow-400 rounded-r-lg">
-                                <p className="text-sm text-yellow-200 font-semibold">Correction Feedback</p>
-                                <p className="text-sm text-rose-300 mt-2"><span className="font-bold">Original:</span> "{entry.correction.original}"</p>
-                                <p className="text-sm text-green-300 mt-1"><span className="font-bold">Suggested:</span> "{entry.correction.corrected}"</p>
-                                <p className="text-sm text-slate-300 mt-2"><span className="font-bold">Tip:</span> {entry.correction.explanation}</p>
+                            <div className="mb-3 p-3 bg-slate-600/50 rounded-lg border border-slate-500/80">
+                                <p className="text-sm font-semibold text-yellow-400 mb-1">Correction</p>
+                                <p className="whitespace-pre-wrap italic text-slate-300">"{entry.correction}"</p>
                             </div>
                         )}
+                        <p className="whitespace-pre-wrap">{entry.text}</p>
                     </div>
                 </div>
             ))}
+            {liveUserTranscript && (
+                <div className="flex items-start gap-4 flex-row-reverse animate-fade-in">
+                    <div className="max-w-xl p-4 rounded-2xl shadow-md bg-blue-600/80 text-white rounded-br-none">
+                        <p className="font-bold mb-1">{Speaker.USER}</p>
+                        <p className="whitespace-pre-wrap italic">{liveUserTranscript}...</p>
+                    </div>
+                </div>
+            )}
+            {isTutorReplying && (
+                <div className="flex items-start gap-4 flex-row">
+                    <div className="max-w-xl p-4 rounded-2xl shadow-md bg-slate-700 text-slate-200 rounded-bl-none">
+                        <p className="font-bold mb-1">{Speaker.TUTOR}</p>
+                        <div className="flex items-center gap-2 text-slate-400">
+                            <LoadingSpinner className="w-4 h-4" />
+                            <span>Thinking...</span>
+                        </div>
+                    </div>
+                </div>
+            )}
             <div ref={endOfMessagesRef} />
         </div>
     );
@@ -252,6 +278,8 @@ export default function App() {
     const [level, setLevel] = useState<string>('B1');
     const [status, setStatus] = useState<SessionStatus>(SessionStatus.INACTIVE);
     const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
+    const [isTutorReplying, setIsTutorReplying] = useState<boolean>(false);
+    const [liveUserTranscript, setLiveUserTranscript] = useState<string>('');
 
     // Listening mode state
     const [listeningLevel, setListeningLevel] = useState<string>('B1');
@@ -265,16 +293,28 @@ export default function App() {
     const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
     const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
-    const audioContextsRef = useRef<{ input?: AudioContext; output?: AudioContext } | null>(null);
+    const audioContextsRef = useRef<{ input?: AudioContext; output?: AudioContext }>({});
     const audioPlaybackQueueRef = useRef<{ nextStartTime: number, sources: Set<AudioBufferSourceNode> }>({ nextStartTime: 0, sources: new Set() });
     const listeningAudioSourceRef = useRef<AudioBufferSourceNode | null>(null);
 
     const currentInputTranscription = useRef<string>('');
     const currentOutputTranscription = useRef<string>('');
 
+     // --- Robust AudioContext Management ---
+    const getOutputAudioContext = useCallback(() => {
+        let context = audioContextsRef.current.output;
+        if (!context || context.state === 'closed') {
+            context = new (window.AudioContext || (window as any).webkitAudioContext)({
+                sampleRate: OUTPUT_SAMPLE_RATE,
+            });
+            audioContextsRef.current.output = context;
+        }
+        return context;
+    }, []);
+
     // --- Core Logic ---
-    const cleanupAudio = useCallback(() => {
-        // Conversation mode cleanup
+    const cleanupSessionResources = useCallback(() => {
+        // Conversation-specific cleanup
         streamRef.current?.getTracks().forEach(track => track.stop());
         streamRef.current = null;
         audioProcessorRef.current?.disconnect();
@@ -284,20 +324,18 @@ export default function App() {
         });
         audioPlaybackQueueRef.current.sources.clear();
         audioPlaybackQueueRef.current.nextStartTime = 0;
-
-        // Listening mode cleanup
+        
+        if (audioContextsRef.current.input) {
+            audioContextsRef.current.input.close().catch(console.error);
+            delete audioContextsRef.current.input;
+        }
+        
+        // Listening-specific cleanup
         if (listeningAudioSourceRef.current) {
             try { listeningAudioSourceRef.current.stop(); } catch (e) { /* ignore */ }
             listeningAudioSourceRef.current = null;
         }
         setIsListeningAudioPlaying(false);
-
-        // Close all audio contexts
-        if (audioContextsRef.current) {
-            audioContextsRef.current.input?.close().catch(console.error);
-            audioContextsRef.current.output?.close().catch(console.error);
-            audioContextsRef.current = null;
-        }
     }, []);
 
     const stopSession = useCallback(async () => {
@@ -310,9 +348,11 @@ export default function App() {
             }
             sessionPromiseRef.current = null;
         }
-        cleanupAudio();
+        cleanupSessionResources();
+        setIsTutorReplying(false);
+        setLiveUserTranscript('');
         setStatus(SessionStatus.INACTIVE);
-    }, [cleanupAudio]);
+    }, [cleanupSessionResources]);
 
 
     const startSession = useCallback(async () => {
@@ -326,17 +366,29 @@ export default function App() {
             setStatus(SessionStatus.ERROR);
             return;
         }
+
         setTranscript([]);
+        setLiveUserTranscript('');
         setStatus(SessionStatus.CONNECTING);
+        
         try {
+            // Step 1: Get microphone access first.
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             streamRef.current = stream;
+
+            // Step 2: Initialize dependencies
             const ai = new GoogleGenAI({ apiKey });
+            const outputAudioContext = getOutputAudioContext();
             const inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: INPUT_SAMPLE_RATE });
-            const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: OUTPUT_SAMPLE_RATE });
-            audioContextsRef.current = { input: inputAudioContext, output: outputAudioContext };
+            audioContextsRef.current.input = inputAudioContext;
+
             audioPlaybackQueueRef.current = { nextStartTime: 0, sources: new Set() };
-            const dynamicSystemInstruction = `${TUTOR_SYSTEM_INSTRUCTION}\n\nThe user has selected Conversation Mode. Topic: "${topic}", Level: "${level}". Please start the conversation now.`;
+
+            const systemInstruction = CONVERSATION_TUTOR_SYSTEM_INSTRUCTION
+                .replace('{TOPIC}', topic)
+                .replace('{LEVEL}', level);
+
+            // Step 3: Connect to the AI session.
             sessionPromiseRef.current = ai.live.connect({
                 model: 'gemini-2.5-flash-native-audio-preview-09-2025',
                 config: {
@@ -344,41 +396,71 @@ export default function App() {
                     inputAudioTranscription: {},
                     outputAudioTranscription: {},
                     speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
-                    systemInstruction: dynamicSystemInstruction,
+                    systemInstruction: systemInstruction,
                 },
                 callbacks: {
                     onopen: () => {
+                        // Step 4: Once connected, start streaming microphone audio.
                         setStatus(SessionStatus.ACTIVE);
+                        setIsTutorReplying(false);
+
                         const source = inputAudioContext.createMediaStreamSource(stream);
                         const scriptProcessor = inputAudioContext.createScriptProcessor(SCRIPT_PROCESSOR_BUFFER_SIZE, 1, 1);
+                        
                         scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
                             const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
                             sessionPromiseRef.current?.then((session) => {
                                 session.sendRealtimeInput({ media: createPcmBlob(inputData) });
                             });
                         };
+
                         source.connect(scriptProcessor);
                         scriptProcessor.connect(inputAudioContext.destination);
                         audioProcessorRef.current = scriptProcessor;
                     },
                     onmessage: async (message: LiveServerMessage) => {
-                        if (message.serverContent?.inputTranscription) { currentInputTranscription.current += message.serverContent.inputTranscription.text; }
-                        if (message.serverContent?.outputTranscription) { currentOutputTranscription.current += message.serverContent.outputTranscription.text; }
+                        if (message.serverContent?.inputTranscription) {
+                            currentInputTranscription.current += message.serverContent.inputTranscription.text;
+                            setLiveUserTranscript(currentInputTranscription.current);
+                        }
+                        if (message.serverContent?.outputTranscription) {
+                            if (!isTutorReplying) setIsTutorReplying(true);
+                            currentOutputTranscription.current += message.serverContent.outputTranscription.text;
+                        }
                         if (message.serverContent?.turnComplete) {
                             const finalInput = currentInputTranscription.current.trim();
-                            const fullOutput = currentOutputTranscription.current.trim();
-                            const speechMatch = fullOutput.match(/<TUTOR_SPEECH>(.*?)<\/TUTOR_SPEECH>/s);
-                            const correctionMatch = fullOutput.match(/<CORRECTION>(.*?)<\/CORRECTION>/s);
-                            const finalText = speechMatch ? speechMatch[1].trim() : fullOutput;
-                            const correction = correctionMatch ? parseCorrection(correctionMatch[1].trim()) : null;
-                            setTranscript(prev => {
-                                let newTranscript = [...prev];
-                                if (finalInput) newTranscript.push({ speaker: Speaker.USER, text: finalInput });
-                                if (finalText) newTranscript.push({ speaker: Speaker.TUTOR, text: finalText, correction: correction ?? undefined });
-                                return newTranscript;
-                            });
+                            const finalOutput = currentOutputTranscription.current.trim();
+                            
                             currentInputTranscription.current = '';
                             currentOutputTranscription.current = '';
+                            setLiveUserTranscript('');
+                            setIsTutorReplying(false);
+
+                            setTranscript(prev => {
+                                let newTranscript = [...prev];
+                                if (finalInput) {
+                                    newTranscript.push({ speaker: Speaker.USER, text: finalInput });
+                                }
+                                if (finalOutput) {
+                                    const correctionPrefix = "Correction:";
+                                    const separator = "||";
+                                    let correctionText: string | undefined = undefined;
+                                    let replyText: string;
+
+                                    if (finalOutput.startsWith(correctionPrefix) && finalOutput.includes(separator)) {
+                                        const parts = finalOutput.split(separator);
+                                        correctionText = parts[0].substring(correctionPrefix.length).trim();
+                                        replyText = parts.slice(1).join(separator).trim();
+                                    } else {
+                                        replyText = finalOutput;
+                                    }
+                                    
+                                    if (replyText || correctionText) {
+                                        newTranscript.push({ speaker: Speaker.TUTOR, text: replyText, correction: correctionText });
+                                    }
+                                }
+                                return newTranscript;
+                            });
                         }
                         const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
                         if (base64Audio && outputAudioContext) {
@@ -407,22 +489,26 @@ export default function App() {
                     },
                     onclose: () => {
                         console.log('Session closed.');
-                        cleanupAudio();
-                        setStatus(SessionStatus.INACTIVE);
+                        cleanupSessionResources();
                     },
                 },
             });
         } catch (error) {
             console.error('Failed to start session:', error);
             let errorMessage = 'Failed to start session.';
-            if (error instanceof Error && (error.name === 'NotAllowedError' || error.message.includes('Permission denied'))) {
-                errorMessage = 'Microphone permission was denied.';
+            if (error instanceof Error) {
+                if (error.name === 'NotAllowedError' || error.message.includes('Permission denied')) {
+                    errorMessage = 'Microphone permission was denied. Please allow microphone access to use this feature.';
+                } else {
+                    errorMessage = `Failed to start session: ${error.message}`;
+                }
             }
             alert(errorMessage);
-            cleanupAudio();
+            cleanupSessionResources();
+            setIsTutorReplying(false);
             setStatus(SessionStatus.INACTIVE);
         }
-    }, [topic, level, cleanupAudio, stopSession]);
+    }, [topic, level, cleanupSessionResources, stopSession, getOutputAudioContext]);
 
     const generateListeningExercise = useCallback(async () => {
         const apiKey = process.env.API_KEY;
@@ -442,22 +528,41 @@ export default function App() {
         try {
             const ai = new GoogleGenAI({ apiKey });
             // Step 1: Generate the text for the transcript and questions
-            const textPrompt = `Generate a listening comprehension exercise on a random topic for level ${listeningLevel}.`;
+            const randomTopic = LISTENING_TOPICS[Math.floor(Math.random() * LISTENING_TOPICS.length)];
+            const textPrompt = `Generate a listening comprehension exercise about ${randomTopic} for level ${listeningLevel}.`;
+
             const textResponse = await ai.models.generateContent({
                 model: 'gemini-2.5-flash',
                 contents: textPrompt,
-                config: { systemInstruction: TUTOR_SYSTEM_INSTRUCTION },
+                config: {
+                    systemInstruction: LISTENING_SYSTEM_INSTRUCTION,
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            transcript: {
+                                type: Type.STRING,
+                                description: "The full dialogue script between two speakers. CRITICAL: The response MUST follow the format '[SpeakerName]: Dialogue text.'. For example: '[Alice]: Did you see the news today? [Bob]: No, what happened?'",
+                            },
+                            questions: {
+                                type: Type.STRING,
+                                description: "The multiple-choice comprehension questions based on the dialogue.",
+                            },
+                        },
+                        required: ['transcript', 'questions'],
+                    },
+                },
             });
-            const responseText = textResponse.text;
-            const transcriptMatch = responseText.match(/<TRANSCRIPT>([\s\S]*?)<\/TRANSCRIPT>/);
-            const questionsMatch = responseText.match(/<QUESTIONS>([\s\S]*?)<\/QUESTIONS>/);
 
-            if (!transcriptMatch || !questionsMatch) {
-                throw new Error("Failed to parse the exercise from the AI's response.");
+            const responseJson = JSON.parse(textResponse.text);
+
+            if (!responseJson.transcript || !responseJson.questions) {
+                throw new Error("Failed to parse the exercise from the AI's response. The JSON structure is incorrect.");
             }
-            const transcriptText = transcriptMatch[1].trim();
-            const questionsText = questionsMatch[1].trim();
+            const transcriptText = responseJson.transcript.trim();
+            const questionsText = responseJson.questions.trim();
             setExercise({ transcript: transcriptText, questions: questionsText });
+
 
             // Step 2: Generate the audio from the transcript text
             const speakerRegex = /\[([^\]]+)\]:/g;
@@ -488,10 +593,7 @@ export default function App() {
             }
 
             // Step 3: Decode audio data and store it in the buffer
-            if (!audioContextsRef.current?.output || audioContextsRef.current.output.state === 'closed') {
-                audioContextsRef.current = { ...audioContextsRef.current, output: new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: OUTPUT_SAMPLE_RATE }) };
-            }
-            const outputAudioContext = audioContextsRef.current.output;
+            const outputAudioContext = getOutputAudioContext();
             const audioBuffer = await decodeAudioData(decode(base64Audio), outputAudioContext, OUTPUT_SAMPLE_RATE, 1);
             setListeningAudioBuffer(audioBuffer);
 
@@ -502,7 +604,7 @@ export default function App() {
         } finally {
             setIsGenerating(false);
         }
-    }, [listeningLevel]);
+    }, [listeningLevel, getOutputAudioContext]);
 
     const handleToggleListeningAudio = useCallback(() => {
         if (isListeningAudioPlaying) {
@@ -512,10 +614,8 @@ export default function App() {
             }
         } else {
             if (!listeningAudioBuffer) return;
-            if (!audioContextsRef.current?.output || audioContextsRef.current.output.state === 'closed') {
-                audioContextsRef.current = { ...audioContextsRef.current, output: new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: OUTPUT_SAMPLE_RATE }) };
-            }
-            const outputAudioContext = audioContextsRef.current.output;
+            
+            const outputAudioContext = getOutputAudioContext();
             const sourceNode = outputAudioContext.createBufferSource();
             sourceNode.buffer = listeningAudioBuffer;
             sourceNode.connect(outputAudioContext.destination);
@@ -527,16 +627,24 @@ export default function App() {
             listeningAudioSourceRef.current = sourceNode;
             setIsListeningAudioPlaying(true);
         }
-    }, [isListeningAudioPlaying, listeningAudioBuffer]);
+    }, [isListeningAudioPlaying, listeningAudioBuffer, getOutputAudioContext]);
 
     useEffect(() => {
-        return () => { stopSession(); };
+        // This effect runs when the component unmounts
+        return () => {
+            stopSession();
+            // Final cleanup of the persistent output context
+            if (audioContextsRef.current.output) {
+                audioContextsRef.current.output.close().catch(console.error);
+            }
+        };
     }, [stopSession]);
 
     useEffect(() => {
         // Full cleanup when mode changes
         stopSession();
         setTranscript([]);
+        setLiveUserTranscript('');
         setExercise(null);
         setListeningAudioBuffer(null);
         setShowListeningTranscript(false);
@@ -554,7 +662,7 @@ export default function App() {
             <main className="flex-grow flex flex-col p-4 gap-4 overflow-hidden">
                 {mode === AppMode.CONVERSATION && (
                     <div className="flex-grow bg-slate-800/50 rounded-2xl flex flex-col overflow-hidden border border-slate-700">
-                        <TranscriptView transcript={transcript} />
+                        <TranscriptView transcript={transcript} isTutorReplying={isTutorReplying} status={status} liveUserTranscript={liveUserTranscript} />
                     </div>
                 )}
                 {mode === AppMode.LISTENING && (
