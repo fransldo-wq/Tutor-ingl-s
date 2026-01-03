@@ -1,7 +1,8 @@
 {
-  "name": "English Conversation Tutor_v.1",
-  "description": "An application to practice English conversation with an AI tutor. Users can choose a topic and engage in a spoken dialogue to improve their listening and speaking skills.",
+  "name": "English Mastery Suite",
+  "description": "A complete English learning application featuring AI-powered conversation, listening exercises, and a professional writing corrector based on Cambridge criteria.",
   "requestFramePermissions": [
-    "microphone"
+    "microphone",
+    "camera"
   ]
 }

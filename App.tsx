@@ -1,10 +1,8 @@
-
-
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { GoogleGenAI, LiveSession, LiveServerMessage, Modality, Blob, Type } from '@google/genai';
 import { Speaker, TranscriptEntry, SessionStatus, AppMode } from './types';
 import { encode, decode, decodeAudioData } from './utils/audio';
-import { MicIcon, StopIcon, LoadingSpinner, SparklesIcon, PlayIcon } from './components/Icons';
+import { MicIcon, StopIcon, LoadingSpinner, SparklesIcon, PlayIcon, DocumentCheckIcon, UploadIcon } from './components/Icons';
 
 // --- Helper Functions & Constants ---
 const INPUT_SAMPLE_RATE = 16000;
@@ -12,78 +10,64 @@ const OUTPUT_SAMPLE_RATE = 24000;
 const SCRIPT_PROCESSOR_BUFFER_SIZE = 4096;
 
 const LISTENING_TOPICS = [
-    // Technology & Science
-    'a recent breakthrough in artificial intelligence',
+    'recent breakthroughs in AI',
     'the ethical implications of gene editing',
-    'exploring the possibility of life on Mars',
-    'the impact of social media on society',
-    'a debate on renewable energy sources',
-    'the future of transportation, like self-driving cars',
+    'exploring life on Mars',
+    'impact of social media',
+    'renewable energy debate',
+    'future of self-driving cars',
     'how quantum computing works',
-
-    // Culture & Arts
-    'a review of a critically acclaimed film or TV series',
-    'the history of a specific music genre, like Jazz or Hip Hop',
-    'a discussion about a famous painting or artist',
-    'the experience of visiting a world-renowned museum',
-    'a conversation about the importance of literature',
-    'the process of writing a novel',
-
-    // Travel & Lifestyle
-    'planning a backpacking trip through Southeast Asia',
-    'the challenges of living as an expatriate',
-    'a story about an unexpected travel adventure',
-    'comparing city life versus country life',
-    'a discussion on minimalism and simple living',
-    'sharing a unique recipe and its cultural origin',
-
-    // Personal & Professional Development
-    'a dialogue about effective public speaking techniques',
-    'the importance of emotional intelligence in the workplace',
-    'a debate on different learning styles',
-    'setting and achieving long-term career goals',
-    'a conversation about managing stress and preventing burnout',
-    'the benefits of learning a new language',
-
-    // Society & History
-    'a discussion about a pivotal moment in modern history',
-    'the challenges of urbanization in developing countries',
-    'a debate on the pros and cons of globalization',
-    'an interview with a community leader about local issues',
-    'a short story inspired by a historical event',
-    'exploring different cultural traditions around the world',
+    'film and TV reviews',
+    'history of Jazz',
+    'famous paintings',
+    'traveling in Southeast Asia',
+    'managing expatriate life',
+    'minimalism and simple living',
+    'public speaking techniques',
+    'learning styles',
+    'stress management',
+    'benefits of bilingualism',
 ];
 
-const CONVERSATION_TUTOR_SYSTEM_INSTRUCTION = `You are a friendly and helpful English language tutor. The user is a {LEVEL} level English learner who wants to have a conversation about "{TOPIC}".
+const CONVERSATION_TUTOR_SYSTEM_INSTRUCTION = `You are a friendly, concise English language tutor. The user is a {LEVEL} level English learner.
+Topic: "{TOPIC}".
 
-Your primary goal is to keep the conversation flowing naturally. After the user speaks, you MUST follow this process in your response:
+Primary Goal:
+- Act like a real tutor: be encouraging and natural, but keep your responses brief (1-3 sentences maximum).
+- Do not overwhelm the user with long explanations. Focus on keeping the conversation moving.
+- Provide a correction if they make a mistake, then continue the chat briefly.
 
-1.  **Correction:** Analyze the user's previous statement for grammatical errors, awkward phrasing, or unnatural sentences. If you find any errors, your response MUST begin *exactly* with the phrase "Correction:" followed by the corrected version of the user's sentence.
-2.  **Reply Separator:** After the correction sentence, you MUST include the separator token "||".
-3.  **Reply:** After the separator, provide your natural, conversational reply.
+Response Structure:
+1. Correction (If needed): Start with "Correction: [Corrected sentence]".
+2. Separator: Add "||".
+3. Conversational Content: Your short, natural response (1-3 sentences).
 
-If there are no errors, just provide the conversational reply without the "Correction:" prefix or the "||" separator.
+Example:
+User: "I study English for 2 years."
+Tutor: "Correction: I have been studying English for two years.||That's a great milestone! Two years is usually when students start feeling more confident. What do you find most difficult about learning it?"`;
 
-Example 1 (with correction):
-User: "I goed to the store yesterday."
-Your response text: "Correction: I went to the store yesterday.||Oh, what did you buy?"
+const LISTENING_SYSTEM_INSTRUCTION = `Generate an engaging listening comprehension exercise for level {LEVEL}.
+1. Create a realistic dialogue (250-400 words).
+2. Use exactly two speakers with tags like [Alice]: and [Bob]:.
+3. Provide 3-4 multiple-choice questions.`;
 
-Example 2 (no correction):
-User: "I went to the store yesterday."
-Your response text: "Oh, what did you buy?"
+const WRITING_CORRECTOR_SYSTEM_INSTRUCTION = `You are an expert English examiner for Cambridge Assessment. Correct the user's text based on their target level ({LEVEL}).
 
-Keep your replies concise to encourage the user to speak more.`;
+Assessment Criteria:
+1. Content: Did they cover all points?
+2. Communicative Achievement: Is the tone appropriate?
+3. Organization: Is there a logical flow?
+4. Language: Accuracy and range of grammar and vocabulary.
 
-
-const LISTENING_SYSTEM_INSTRUCTION = `You are an AI assistant for English language learners. Your task is to generate a listening comprehension exercise.
-
-Process:
-1.  On a random, engaging topic, create a realistic dialogue (approx. 200-300 words) appropriate for the selected level.
-2.  The dialogue MUST feature exactly two distinct speakers (e.g., Alice and Bob).
-3.  The dialogue text MUST be formatted with speaker tags, where each line of dialogue is prefixed with the speaker's name in brackets. Example: "[Alice]: Hi Bob, how are you? [Bob]: I'm doing great, thanks!".
-4.  After the dialogue, generate 3-4 multiple-choice comprehension questions (A, B, C) based on the dialogue. Do not provide the answers.
-`;
-
+Output format (JSON):
+{
+  "score": "A score from 1-5 (Cambridge scale)",
+  "summary": "Overall feedback",
+  "corrections": [
+    {"original": "...", "improved": "...", "explanation": "..."}
+  ],
+  "improvedVersion": "The full text rewritten professionally at {LEVEL} level."
+}`;
 
 function createPcmBlob(data: Float32Array): Blob {
     const l = data.length;
@@ -97,6 +81,18 @@ function createPcmBlob(data: Float32Array): Blob {
     };
 }
 
+async function fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => {
+            const base64String = (reader.result as string).split(',')[1];
+            resolve(base64String);
+        };
+        reader.onerror = (error) => reject(error);
+    });
+}
+
 // --- UI Components ---
 const LevelSelector: React.FC<{
     level: string;
@@ -104,176 +100,28 @@ const LevelSelector: React.FC<{
     disabled: boolean;
 }> = ({ level, setLevel, disabled }) => (
     <div className="flex items-center gap-2">
-        <span className="text-slate-400 font-medium">Level:</span>
+        <span className="text-slate-400 font-medium">Target:</span>
         <select
             value={level}
             onChange={(e) => setLevel(e.target.value)}
             disabled={disabled}
             className="bg-slate-700 text-slate-100 rounded-lg px-3 py-1 border border-slate-600 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
         >
-            <option value="B1">B1</option>
-            <option value="B2">B2</option>
-            <option value="C1">C1</option>
+            <option value="A2">A2 (Elementary)</option>
+            <option value="B1">B1 (Intermediate)</option>
+            <option value="B2">B2 (Upper Intermediate)</option>
+            <option value="C1">C1 (Advanced)</option>
+            <option value="C2">C2 (Proficiency)</option>
         </select>
     </div>
 );
 
-interface ConversationControlsProps {
-    status: SessionStatus;
-    topic: string;
-    level: string;
-    onTopicChange: (topic: string) => void;
-    onLevelChange: (level: string) => void;
-    onStart: () => void;
-    onStop: () => void;
-}
-
-const ConversationControls: React.FC<ConversationControlsProps> = ({ status, topic, level, onTopicChange, onLevelChange, onStart, onStop }) => {
-    const isInactive = status === SessionStatus.INACTIVE || status === SessionStatus.ERROR;
-    const isConnecting = status === SessionStatus.CONNECTING;
-
-    return (
-        <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-4 shadow-2xl border border-slate-700">
-            <div className="flex flex-col md:flex-row items-center gap-4">
-                <input
-                    type="text"
-                    value={topic}
-                    onChange={(e) => onTopicChange(e.target.value)}
-                    placeholder="Enter conversation topic..."
-                    disabled={!isInactive}
-                    className="w-full flex-grow bg-slate-700 text-slate-100 placeholder-slate-400 rounded-lg px-4 py-3 border border-slate-600 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition-all duration-300"
-                />
-                <LevelSelector level={level} setLevel={onLevelChange} disabled={!isInactive} />
-                {isInactive ? (
-                    <button
-                        onClick={onStart}
-                        disabled={!topic.trim()}
-                        className="w-full md:w-auto flex items-center justify-center gap-2 px-6 py-3 bg-cyan-600 text-white font-semibold rounded-lg shadow-md hover:bg-cyan-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-all duration-300"
-                    >
-                        <MicIcon className="w-5 h-5" />
-                        <span>Start</span>
-                    </button>
-                ) : (
-                    <button
-                        onClick={onStop}
-                        disabled={isConnecting}
-                        className="w-full md:w-auto flex items-center justify-center gap-2 px-6 py-3 bg-rose-600 text-white font-semibold rounded-lg shadow-md hover:bg-rose-700 disabled:bg-slate-600 transition-all duration-300"
-                    >
-                        {isConnecting ? (
-                            <>
-                                <LoadingSpinner className="w-5 h-5" />
-                                <span>Starting...</span>
-                            </>
-                        ) : (
-                            <>
-                                <StopIcon className="w-5 h-5" />
-                                <span>Stop</span>
-                            </>
-                        )}
-                    </button>
-                )}
-            </div>
-        </div>
-    );
-};
-
-interface TranscriptViewProps {
-    transcript: TranscriptEntry[];
-    isTutorReplying: boolean;
-    status: SessionStatus;
-    liveUserTranscript: string;
-}
-
-const TranscriptView: React.FC<TranscriptViewProps> = ({ transcript, isTutorReplying, status, liveUserTranscript }) => {
-    const endOfMessagesRef = useRef<HTMLDivElement>(null);
-
-    useEffect(() => {
-        endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [transcript, isTutorReplying, liveUserTranscript]);
-
-    return (
-        <div className="flex-grow space-y-6 overflow-y-auto p-4 md:p-6">
-            {transcript.length === 0 && !isTutorReplying && status !== SessionStatus.ACTIVE && status !== SessionStatus.CONNECTING && !liveUserTranscript && (
-                <div className="text-center text-slate-400 py-10">
-                    <h2 className="text-2xl font-bold text-slate-200 mb-2">Welcome!</h2>
-                    <p>Enter a topic, select a level, and click "Start" to begin your practice session.</p>
-                </div>
-            )}
-             {status === SessionStatus.ACTIVE && transcript.length === 0 && !isTutorReplying && !liveUserTranscript && (
-                 <div className="text-center text-slate-400 py-10 animate-pulse">
-                    <MicIcon className="w-12 h-12 mx-auto text-cyan-400 mb-4" />
-                    <h2 className="text-2xl font-bold text-slate-200 mb-2">Listening...</h2>
-                    <p>Please start by saying something about the topic.</p>
-                </div>
-            )}
-            {transcript.map((entry, index) => (
-                <div key={index} className={`flex items-start gap-4 ${entry.speaker === Speaker.USER ? 'flex-row-reverse' : 'flex-row'}`}>
-                    <div className={`max-w-xl p-4 rounded-2xl shadow-md ${entry.speaker === Speaker.USER ? 'bg-blue-600 text-white rounded-br-none' : 'bg-slate-700 text-slate-200 rounded-bl-none'}`}>
-                        <p className="font-bold mb-1">{entry.speaker}</p>
-                        {entry.speaker === Speaker.TUTOR && entry.correction && (
-                            <div className="mb-3 p-3 bg-slate-600/50 rounded-lg border border-slate-500/80">
-                                <p className="text-sm font-semibold text-yellow-400 mb-1">Correction</p>
-                                <p className="whitespace-pre-wrap italic text-slate-300">"{entry.correction}"</p>
-                            </div>
-                        )}
-                        <p className="whitespace-pre-wrap">{entry.text}</p>
-                    </div>
-                </div>
-            ))}
-            {liveUserTranscript && (
-                <div className="flex items-start gap-4 flex-row-reverse animate-fade-in">
-                    <div className="max-w-xl p-4 rounded-2xl shadow-md bg-blue-600/80 text-white rounded-br-none">
-                        <p className="font-bold mb-1">{Speaker.USER}</p>
-                        <p className="whitespace-pre-wrap italic">{liveUserTranscript}...</p>
-                    </div>
-                </div>
-            )}
-            {isTutorReplying && (
-                <div className="flex items-start gap-4 flex-row">
-                    <div className="max-w-xl p-4 rounded-2xl shadow-md bg-slate-700 text-slate-200 rounded-bl-none">
-                        <p className="font-bold mb-1">{Speaker.TUTOR}</p>
-                        <div className="flex items-center gap-2 text-slate-400">
-                            <LoadingSpinner className="w-4 h-4" />
-                            <span>Thinking...</span>
-                        </div>
-                    </div>
-                </div>
-            )}
-            <div ref={endOfMessagesRef} />
-        </div>
-    );
-};
-
-interface ModeSelectorProps {
-    mode: AppMode;
-    setMode: (mode: AppMode) => void;
-}
-
-const ModeSelector: React.FC<ModeSelectorProps> = ({ mode, setMode }) => (
-    <div className="flex justify-center p-2 bg-slate-800/80 rounded-xl">
-        <button
-            onClick={() => setMode(AppMode.CONVERSATION)}
-            className={`px-6 py-2 rounded-lg font-semibold transition-all duration-300 ${mode === AppMode.CONVERSATION ? 'bg-cyan-600 text-white shadow-md' : 'bg-transparent text-slate-300 hover:bg-slate-700'}`}
-        >
-            Conversation Tutor
-        </button>
-        <button
-            onClick={() => setMode(AppMode.LISTENING)}
-            className={`px-6 py-2 rounded-lg font-semibold transition-all duration-300 ${mode === AppMode.LISTENING ? 'bg-cyan-600 text-white shadow-md' : 'bg-transparent text-slate-300 hover:bg-slate-700'}`}
-        >
-            Listening Comprehension
-        </button>
-    </div>
-);
-
-
 // --- Main App Component ---
 
 export default function App() {
-    // Shared state
     const [mode, setMode] = useState<AppMode>(AppMode.CONVERSATION);
 
-    // Conversation mode state
+    // Conversation state
     const [topic, setTopic] = useState<string>('');
     const [level, setLevel] = useState<string>('B1');
     const [status, setStatus] = useState<SessionStatus>(SessionStatus.INACTIVE);
@@ -281,71 +129,67 @@ export default function App() {
     const [isTutorReplying, setIsTutorReplying] = useState<boolean>(false);
     const [liveUserTranscript, setLiveUserTranscript] = useState<string>('');
 
-    // Listening mode state
+    // Listening state
     const [listeningLevel, setListeningLevel] = useState<string>('B1');
     const [isGenerating, setIsGenerating] = useState<boolean>(false);
     const [exercise, setExercise] = useState<{ transcript: string, questions: string } | null>(null);
     const [listeningAudioBuffer, setListeningAudioBuffer] = useState<AudioBuffer | null>(null);
     const [isListeningAudioPlaying, setIsListeningAudioPlaying] = useState<boolean>(false);
-    const [showListeningTranscript, setShowListeningTranscript] = useState<boolean>(false);
 
-    // Mutable refs for managing session and audio resources
+    // Writing state
+    const [writingInput, setWritingInput] = useState<string>('');
+    const [writingLevel, setWritingLevel] = useState<string>('B2');
+    const [isCorrecting, setIsCorrecting] = useState<boolean>(false);
+    const [writingResult, setWritingResult] = useState<any | null>(null);
+    const [uploadedFile, setUploadedFile] = useState<{ data: string, type: string } | null>(null);
+
     const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
     const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
     const audioContextsRef = useRef<{ input?: AudioContext; output?: AudioContext }>({});
     const audioPlaybackQueueRef = useRef<{ nextStartTime: number, sources: Set<AudioBufferSourceNode> }>({ nextStartTime: 0, sources: new Set() });
-    const listeningAudioSourceRef = useRef<AudioBufferSourceNode | null>(null);
+    const messagesEndRef = useRef<HTMLDivElement>(null);
 
     const currentInputTranscription = useRef<string>('');
     const currentOutputTranscription = useRef<string>('');
 
-     // --- Robust AudioContext Management ---
+    // Auto-scroll logic
+    const scrollToBottom = useCallback(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, []);
+
+    useEffect(() => {
+        if (mode === AppMode.CONVERSATION) {
+            scrollToBottom();
+        }
+    }, [transcript, liveUserTranscript, isTutorReplying, mode, scrollToBottom]);
+
     const getOutputAudioContext = useCallback(() => {
         let context = audioContextsRef.current.output;
         if (!context || context.state === 'closed') {
-            context = new (window.AudioContext || (window as any).webkitAudioContext)({
-                sampleRate: OUTPUT_SAMPLE_RATE,
-            });
+            context = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: OUTPUT_SAMPLE_RATE });
             audioContextsRef.current.output = context;
         }
         return context;
     }, []);
 
-    // --- Core Logic ---
     const cleanupSessionResources = useCallback(() => {
-        // Conversation-specific cleanup
         streamRef.current?.getTracks().forEach(track => track.stop());
         streamRef.current = null;
         audioProcessorRef.current?.disconnect();
         audioProcessorRef.current = null;
-        audioPlaybackQueueRef.current.sources.forEach(source => {
-            try { source.stop(); } catch (e) { /* ignore */ }
-        });
+        audioPlaybackQueueRef.current.sources.forEach(source => { try { source.stop(); } catch (e) {} });
         audioPlaybackQueueRef.current.sources.clear();
         audioPlaybackQueueRef.current.nextStartTime = 0;
-        
         if (audioContextsRef.current.input) {
             audioContextsRef.current.input.close().catch(console.error);
             delete audioContextsRef.current.input;
         }
-        
-        // Listening-specific cleanup
-        if (listeningAudioSourceRef.current) {
-            try { listeningAudioSourceRef.current.stop(); } catch (e) { /* ignore */ }
-            listeningAudioSourceRef.current = null;
-        }
-        setIsListeningAudioPlaying(false);
     }, []);
 
     const stopSession = useCallback(async () => {
         if (sessionPromiseRef.current) {
-            try {
-                const session = await sessionPromiseRef.current;
-                session.close();
-            } catch (error) {
-                console.error('Error closing session:', error);
-            }
+            try { (await sessionPromiseRef.current).close(); } catch (e) {}
             sessionPromiseRef.current = null;
         }
         cleanupSessionResources();
@@ -354,41 +198,22 @@ export default function App() {
         setStatus(SessionStatus.INACTIVE);
     }, [cleanupSessionResources]);
 
-
     const startSession = useCallback(async () => {
-        if (!topic.trim()) {
-            alert('Please enter a topic.');
-            return;
-        }
+        if (!topic.trim()) return alert('Please enter a topic.');
         const apiKey = process.env.API_KEY;
-        if (!apiKey) {
-            alert('API Key is not configured.');
-            setStatus(SessionStatus.ERROR);
-            return;
-        }
+        if (!apiKey) return setStatus(SessionStatus.ERROR);
 
         setTranscript([]);
-        setLiveUserTranscript('');
         setStatus(SessionStatus.CONNECTING);
         
         try {
-            // Step 1: Get microphone access first.
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             streamRef.current = stream;
-
-            // Step 2: Initialize dependencies
             const ai = new GoogleGenAI({ apiKey });
-            const outputAudioContext = getOutputAudioContext();
-            const inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: INPUT_SAMPLE_RATE });
-            audioContextsRef.current.input = inputAudioContext;
+            const outCtx = getOutputAudioContext();
+            const inCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: INPUT_SAMPLE_RATE });
+            audioContextsRef.current.input = inCtx;
 
-            audioPlaybackQueueRef.current = { nextStartTime: 0, sources: new Set() };
-
-            const systemInstruction = CONVERSATION_TUTOR_SYSTEM_INSTRUCTION
-                .replace('{TOPIC}', topic)
-                .replace('{LEVEL}', level);
-
-            // Step 3: Connect to the AI session.
             sessionPromiseRef.current = ai.live.connect({
                 model: 'gemini-2.5-flash-native-audio-preview-09-2025',
                 config: {
@@ -396,353 +221,388 @@ export default function App() {
                     inputAudioTranscription: {},
                     outputAudioTranscription: {},
                     speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
-                    systemInstruction: systemInstruction,
+                    systemInstruction: CONVERSATION_TUTOR_SYSTEM_INSTRUCTION.replace('{TOPIC}', topic).replace('{LEVEL}', level),
                 },
                 callbacks: {
                     onopen: () => {
-                        // Step 4: Once connected, start streaming microphone audio.
                         setStatus(SessionStatus.ACTIVE);
-                        setIsTutorReplying(false);
-
-                        const source = inputAudioContext.createMediaStreamSource(stream);
-                        const scriptProcessor = inputAudioContext.createScriptProcessor(SCRIPT_PROCESSOR_BUFFER_SIZE, 1, 1);
-                        
-                        scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
-                            const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
-                            sessionPromiseRef.current?.then((session) => {
-                                session.sendRealtimeInput({ media: createPcmBlob(inputData) });
-                            });
+                        const source = inCtx.createMediaStreamSource(stream);
+                        const scriptProcessor = inCtx.createScriptProcessor(SCRIPT_PROCESSOR_BUFFER_SIZE, 1, 1);
+                        scriptProcessor.onaudioprocess = (e) => {
+                            const inputData = e.inputBuffer.getChannelData(0);
+                            sessionPromiseRef.current?.then(s => s.sendRealtimeInput({ media: createPcmBlob(inputData) }));
                         };
-
                         source.connect(scriptProcessor);
-                        scriptProcessor.connect(inputAudioContext.destination);
+                        scriptProcessor.connect(inCtx.destination);
                         audioProcessorRef.current = scriptProcessor;
                     },
-                    onmessage: async (message: LiveServerMessage) => {
-                        if (message.serverContent?.inputTranscription) {
-                            currentInputTranscription.current += message.serverContent.inputTranscription.text;
+                    onmessage: async (msg: LiveServerMessage) => {
+                        if (msg.serverContent?.inputTranscription) {
+                            currentInputTranscription.current += msg.serverContent.inputTranscription.text;
                             setLiveUserTranscript(currentInputTranscription.current);
                         }
-                        if (message.serverContent?.outputTranscription) {
-                            if (!isTutorReplying) setIsTutorReplying(true);
-                            currentOutputTranscription.current += message.serverContent.outputTranscription.text;
+                        if (msg.serverContent?.outputTranscription) {
+                            setIsTutorReplying(true);
+                            currentOutputTranscription.current += msg.serverContent.outputTranscription.text;
                         }
-                        if (message.serverContent?.turnComplete) {
-                            const finalInput = currentInputTranscription.current.trim();
-                            const finalOutput = currentOutputTranscription.current.trim();
-                            
-                            currentInputTranscription.current = '';
-                            currentOutputTranscription.current = '';
-                            setLiveUserTranscript('');
-                            setIsTutorReplying(false);
+                        if (msg.serverContent?.turnComplete) {
+                            const input = currentInputTranscription.current.trim();
+                            const output = currentOutputTranscription.current.trim();
+                            currentInputTranscription.current = ''; currentOutputTranscription.current = '';
+                            setLiveUserTranscript(''); setIsTutorReplying(false);
 
                             setTranscript(prev => {
-                                let newTranscript = [...prev];
-                                if (finalInput) {
-                                    newTranscript.push({ speaker: Speaker.USER, text: finalInput });
+                                const next = [...prev];
+                                if (input) next.push({ speaker: Speaker.USER, text: input });
+                                if (output) {
+                                    const hasCorr = output.includes("||");
+                                    const correction = hasCorr ? output.split("||")[0].replace("Correction:", "").trim() : undefined;
+                                    const text = hasCorr ? output.split("||")[1].trim() : output;
+                                    next.push({ speaker: Speaker.TUTOR, text, correction });
                                 }
-                                if (finalOutput) {
-                                    const correctionPrefix = "Correction:";
-                                    const separator = "||";
-                                    let correctionText: string | undefined = undefined;
-                                    let replyText: string;
-
-                                    if (finalOutput.startsWith(correctionPrefix) && finalOutput.includes(separator)) {
-                                        const parts = finalOutput.split(separator);
-                                        correctionText = parts[0].substring(correctionPrefix.length).trim();
-                                        replyText = parts.slice(1).join(separator).trim();
-                                    } else {
-                                        replyText = finalOutput;
-                                    }
-                                    
-                                    if (replyText || correctionText) {
-                                        newTranscript.push({ speaker: Speaker.TUTOR, text: replyText, correction: correctionText });
-                                    }
-                                }
-                                return newTranscript;
+                                return next;
                             });
                         }
-                        const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
-                        if (base64Audio && outputAudioContext) {
-                            const { nextStartTime, sources } = audioPlaybackQueueRef.current;
-                            const effectiveStartTime = Math.max(nextStartTime, outputAudioContext.currentTime);
-                            const audioBuffer = await decodeAudioData(decode(base64Audio), outputAudioContext, OUTPUT_SAMPLE_RATE, 1);
-                            const sourceNode = outputAudioContext.createBufferSource();
-                            sourceNode.buffer = audioBuffer;
-                            sourceNode.connect(outputAudioContext.destination);
-                            sourceNode.addEventListener('ended', () => { sources.delete(sourceNode); });
-                            sourceNode.start(effectiveStartTime);
-                            audioPlaybackQueueRef.current.nextStartTime = effectiveStartTime + audioBuffer.duration;
-                            sources.add(sourceNode);
-                        }
-                        if (message.serverContent?.interrupted) {
-                            audioPlaybackQueueRef.current.sources.forEach(source => source.stop());
-                            audioPlaybackQueueRef.current.sources.clear();
-                            audioPlaybackQueueRef.current.nextStartTime = 0;
+                        const b64 = msg.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
+                        if (b64) {
+                            const start = Math.max(audioPlaybackQueueRef.current.nextStartTime, outCtx.currentTime);
+                            const buffer = await decodeAudioData(decode(b64), outCtx, OUTPUT_SAMPLE_RATE, 1);
+                            const node = outCtx.createBufferSource();
+                            node.buffer = buffer;
+                            node.connect(outCtx.destination);
+                            node.onended = () => audioPlaybackQueueRef.current.sources.delete(node);
+                            node.start(start);
+                            audioPlaybackQueueRef.current.nextStartTime = start + buffer.duration;
+                            audioPlaybackQueueRef.current.sources.add(node);
                         }
                     },
-                    onerror: (e: ErrorEvent) => {
-                        console.error('Session error:', e);
-                        alert('A connection error occurred.');
-                        setStatus(SessionStatus.ERROR);
-                        stopSession();
-                    },
-                    onclose: () => {
-                        console.log('Session closed.');
-                        cleanupSessionResources();
-                    },
+                    onerror: () => stopSession(),
                 },
             });
-        } catch (error) {
-            console.error('Failed to start session:', error);
-            let errorMessage = 'Failed to start session.';
-            if (error instanceof Error) {
-                if (error.name === 'NotAllowedError' || error.message.includes('Permission denied')) {
-                    errorMessage = 'Microphone permission was denied. Please allow microphone access to use this feature.';
-                } else {
-                    errorMessage = `Failed to start session: ${error.message}`;
-                }
-            }
-            alert(errorMessage);
-            cleanupSessionResources();
-            setIsTutorReplying(false);
-            setStatus(SessionStatus.INACTIVE);
-        }
-    }, [topic, level, cleanupSessionResources, stopSession, getOutputAudioContext]);
+        } catch (e) { stopSession(); }
+    }, [topic, level, stopSession, getOutputAudioContext]);
 
-    const generateListeningExercise = useCallback(async () => {
+    const handleWritingFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const base64 = await fileToBase64(file);
+        setUploadedFile({ data: base64, type: file.type });
+    };
+
+    const runWritingCorrection = async () => {
         const apiKey = process.env.API_KEY;
-        if (!apiKey) {
-            alert('API Key is not configured.');
-            return;
-        }
-
-        setIsGenerating(true);
-        setExercise(null);
-        setListeningAudioBuffer(null);
-        setShowListeningTranscript(false);
-        if (listeningAudioSourceRef.current) {
-            try { listeningAudioSourceRef.current.stop(); } catch (e) { /* ignore */ }
-        }
+        if (!apiKey || (!writingInput.trim() && !uploadedFile)) return;
+        setIsCorrecting(true);
+        setWritingResult(null);
 
         try {
             const ai = new GoogleGenAI({ apiKey });
-            // Step 1: Generate the text for the transcript and questions
-            const randomTopic = LISTENING_TOPICS[Math.floor(Math.random() * LISTENING_TOPICS.length)];
-            const textPrompt = `Generate a listening comprehension exercise about ${randomTopic} for level ${listeningLevel}.`;
+            const parts: any[] = [{ text: `Correct this English text based on level ${writingLevel}. Consider Cambridge criteria.` }];
+            if (writingInput) parts.push({ text: `Content: ${writingInput}` });
+            if (uploadedFile) {
+                parts.push({
+                    inlineData: { data: uploadedFile.data, mimeType: uploadedFile.type }
+                });
+            }
 
-            const textResponse = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: textPrompt,
+            const res = await ai.models.generateContent({
+                model: 'gemini-3-flash-preview',
+                contents: { parts },
                 config: {
-                    systemInstruction: LISTENING_SYSTEM_INSTRUCTION,
+                    systemInstruction: WRITING_CORRECTOR_SYSTEM_INSTRUCTION.replace('{LEVEL}', writingLevel),
                     responseMimeType: "application/json",
                     responseSchema: {
                         type: Type.OBJECT,
                         properties: {
-                            transcript: {
-                                type: Type.STRING,
-                                description: "The full dialogue script between two speakers. CRITICAL: The response MUST follow the format '[SpeakerName]: Dialogue text.'. For example: '[Alice]: Did you see the news today? [Bob]: No, what happened?'",
+                            score: { type: Type.STRING },
+                            summary: { type: Type.STRING },
+                            corrections: {
+                                type: Type.ARRAY,
+                                items: {
+                                    type: Type.OBJECT,
+                                    properties: {
+                                        original: { type: Type.STRING },
+                                        improved: { type: Type.STRING },
+                                        explanation: { type: Type.STRING }
+                                    }
+                                }
                             },
-                            questions: {
-                                type: Type.STRING,
-                                description: "The multiple-choice comprehension questions based on the dialogue.",
-                            },
+                            improvedVersion: { type: Type.STRING }
                         },
-                        required: ['transcript', 'questions'],
-                    },
-                },
+                        required: ['score', 'summary', 'corrections', 'improvedVersion']
+                    }
+                }
             });
+            setWritingResult(JSON.parse(res.text));
+        } catch (e) { alert("Correction failed."); } finally { setIsCorrecting(false); }
+    };
 
-            const responseJson = JSON.parse(textResponse.text);
+    const generateListeningExercise = async () => {
+        const apiKey = process.env.API_KEY;
+        if (!apiKey) return;
+        setIsGenerating(true); setExercise(null); setListeningAudioBuffer(null);
+        try {
+            const ai = new GoogleGenAI({ apiKey });
+            const topic = LISTENING_TOPICS[Math.floor(Math.random() * LISTENING_TOPICS.length)];
+            const res = await ai.models.generateContent({
+                model: 'gemini-3-flash-preview',
+                contents: `Create listening exercise for level ${listeningLevel} on ${topic}`,
+                config: {
+                    systemInstruction: LISTENING_SYSTEM_INSTRUCTION.replace('{LEVEL}', listeningLevel),
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            transcript: { type: Type.STRING },
+                            questions: { type: Type.STRING }
+                        }
+                    }
+                }
+            });
+            const json = JSON.parse(res.text);
+            setExercise(json);
 
-            if (!responseJson.transcript || !responseJson.questions) {
-                throw new Error("Failed to parse the exercise from the AI's response. The JSON structure is incorrect.");
-            }
-            const transcriptText = responseJson.transcript.trim();
-            const questionsText = responseJson.questions.trim();
-            setExercise({ transcript: transcriptText, questions: questionsText });
-
-
-            // Step 2: Generate the audio from the transcript text
-            const speakerRegex = /\[([^\]]+)\]:/g;
-            const speakers = [...new Set(transcriptText.match(speakerRegex)?.map(s => s.replace(/[\[\]:]/g, '').trim()) ?? [])];
-            if (speakers.length !== 2) {
-                throw new Error(`Expected 2 speakers, but found ${speakers.length}. Please try generating again.`);
-            }
-            
-            const audioResponse = await ai.models.generateContent({
+            const tts = await ai.models.generateContent({
                 model: "gemini-2.5-flash-preview-tts",
-                contents: [{ parts: [{ text: transcriptText }] }],
+                contents: [{ parts: [{ text: json.transcript }] }],
                 config: {
                     responseModalities: [Modality.AUDIO],
                     speechConfig: {
                         multiSpeakerVoiceConfig: {
                             speakerVoiceConfigs: [
-                                { speaker: speakers[0], voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
-                                { speaker: speakers[1], voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } }
+                                { speaker: 'Alice', voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
+                                { speaker: 'Bob', voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } }
                             ]
                         }
                     }
                 }
             });
-
-            const base64Audio = audioResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-            if (!base64Audio) {
-                throw new Error("Failed to generate audio data.");
-            }
-
-            // Step 3: Decode audio data and store it in the buffer
-            const outputAudioContext = getOutputAudioContext();
-            const audioBuffer = await decodeAudioData(decode(base64Audio), outputAudioContext, OUTPUT_SAMPLE_RATE, 1);
-            setListeningAudioBuffer(audioBuffer);
-
-        } catch (error) {
-            console.error("Failed to generate exercise:", error);
-            alert(`Sorry, there was an error generating the exercise: ${error instanceof Error ? error.message : String(error)}`);
-            setExercise(null);
-        } finally {
-            setIsGenerating(false);
-        }
-    }, [listeningLevel, getOutputAudioContext]);
-
-    const handleToggleListeningAudio = useCallback(() => {
-        if (isListeningAudioPlaying) {
-            if (listeningAudioSourceRef.current) {
-                try { listeningAudioSourceRef.current.stop(); } catch (e) { /* ignore */ }
-                // onended callback will handle state changes
-            }
-        } else {
-            if (!listeningAudioBuffer) return;
-            
-            const outputAudioContext = getOutputAudioContext();
-            const sourceNode = outputAudioContext.createBufferSource();
-            sourceNode.buffer = listeningAudioBuffer;
-            sourceNode.connect(outputAudioContext.destination);
-            sourceNode.onended = () => {
-                setIsListeningAudioPlaying(false);
-                listeningAudioSourceRef.current = null;
-            };
-            sourceNode.start();
-            listeningAudioSourceRef.current = sourceNode;
-            setIsListeningAudioPlaying(true);
-        }
-    }, [isListeningAudioPlaying, listeningAudioBuffer, getOutputAudioContext]);
-
-    useEffect(() => {
-        // This effect runs when the component unmounts
-        return () => {
-            stopSession();
-            // Final cleanup of the persistent output context
-            if (audioContextsRef.current.output) {
-                audioContextsRef.current.output.close().catch(console.error);
-            }
-        };
-    }, [stopSession]);
-
-    useEffect(() => {
-        // Full cleanup when mode changes
-        stopSession();
-        setTranscript([]);
-        setLiveUserTranscript('');
-        setExercise(null);
-        setListeningAudioBuffer(null);
-        setShowListeningTranscript(false);
-    }, [mode, stopSession]);
-
+            const b64 = tts.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+            if (b64) setListeningAudioBuffer(await decodeAudioData(decode(b64), getOutputAudioContext(), OUTPUT_SAMPLE_RATE, 1));
+        } catch (e) { alert("Generation failed."); } finally { setIsGenerating(false); }
+    };
 
     return (
-        <div className="h-screen w-screen bg-slate-900 text-slate-100 flex flex-col font-sans overflow-hidden">
-            <header className="text-center p-4 border-b border-slate-700/50">
-                <h1 className="text-2xl md:text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-500">
-                    English Language Practice
+        <div className="h-screen w-screen bg-slate-950 text-slate-100 flex flex-col font-sans overflow-hidden">
+            <header className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
+                <h1 className="text-2xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-blue-500 to-indigo-500">
+                    ENGLISH MASTERY AI
                 </h1>
+                <div className="flex bg-slate-800 rounded-full p-1 border border-slate-700">
+                    {[AppMode.CONVERSATION, AppMode.LISTENING, AppMode.WRITING].map(m => (
+                        <button key={m} onClick={() => setMode(m)} className={`px-4 py-1.5 rounded-full text-sm font-bold transition-all ${mode === m ? 'bg-cyan-600 shadow-lg' : 'text-slate-400 hover:text-white'}`}>
+                            {m.charAt(0) + m.slice(1).toLowerCase()}
+                        </button>
+                    ))}
+                </div>
             </header>
 
-            <main className="flex-grow flex flex-col p-4 gap-4 overflow-hidden">
+            <main className="flex-grow flex flex-col p-4 gap-4 overflow-hidden max-w-6xl mx-auto w-full">
                 {mode === AppMode.CONVERSATION && (
-                    <div className="flex-grow bg-slate-800/50 rounded-2xl flex flex-col overflow-hidden border border-slate-700">
-                        <TranscriptView transcript={transcript} isTutorReplying={isTutorReplying} status={status} liveUserTranscript={liveUserTranscript} />
+                    <div className="flex-grow flex flex-col overflow-hidden gap-4">
+                        <div className="flex-grow bg-slate-900/50 rounded-3xl border border-slate-800 p-6 overflow-y-auto space-y-4">
+                            {transcript.length === 0 && (
+                                <div className="h-full flex flex-col items-center justify-center text-slate-500 text-center p-8">
+                                    <MicIcon className="w-16 h-16 mb-4 opacity-20" />
+                                    <p className="text-xl font-medium">Start a conversation to improve your fluency.</p>
+                                    <p className="text-sm mt-2">I will provide audio input and correct your grammar as we talk.</p>
+                                </div>
+                            )}
+                            {transcript.map((e, i) => (
+                                <div key={i} className={`flex ${e.speaker === Speaker.USER ? 'justify-end' : 'justify-start'}`}>
+                                    <div className={`max-w-[85%] p-4 rounded-2xl shadow-sm ${e.speaker === Speaker.USER ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-slate-800 border border-slate-700 rounded-bl-none'}`}>
+                                        {e.correction && (
+                                            <div className="mb-2 p-2 bg-yellow-400/10 border border-yellow-400/20 rounded-lg text-xs">
+                                                <span className="font-bold text-yellow-400">Tutor's Correction: </span>
+                                                <span className="italic">"{e.correction}"</span>
+                                            </div>
+                                        )}
+                                        <p className="leading-relaxed">{e.text}</p>
+                                    </div>
+                                </div>
+                            ))}
+                            {liveUserTranscript && (
+                                <div className="flex justify-end opacity-50">
+                                    <div className="bg-indigo-600/50 p-4 rounded-2xl rounded-br-none italic">{liveUserTranscript}...</div>
+                                </div>
+                            )}
+                            {isTutorReplying && (
+                                <div className="flex justify-start">
+                                    <div className="bg-slate-800 p-4 rounded-2xl rounded-bl-none flex items-center gap-2">
+                                        <div className="flex space-x-1">
+                                            <div className="w-2 h-2 bg-cyan-500 rounded-full animate-bounce"></div>
+                                            <div className="w-2 h-2 bg-cyan-500 rounded-full animate-bounce [animation-delay:0.2s]"></div>
+                                            <div className="w-2 h-2 bg-cyan-500 rounded-full animate-bounce [animation-delay:0.4s]"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                            {/* Hidden element to mark the end of the conversation */}
+                            <div ref={messagesEndRef} className="h-1 w-full" />
+                        </div>
+                        <div className="bg-slate-900 border border-slate-800 p-4 rounded-3xl shadow-2xl flex flex-col md:flex-row items-center gap-4">
+                            <input
+                                placeholder="Conversation Topic (e.g. Travel, Jobs, Movies)"
+                                className="flex-grow bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-cyan-500"
+                                value={topic} onChange={e => setTopic(e.target.value)} disabled={status !== SessionStatus.INACTIVE}
+                            />
+                            <LevelSelector level={level} setLevel={setLevel} disabled={status !== SessionStatus.INACTIVE} />
+                            {status === SessionStatus.INACTIVE ? (
+                                <button onClick={startSession} className="bg-cyan-600 hover:bg-cyan-500 text-white px-8 py-3 rounded-xl font-bold flex items-center gap-2 transition-all">
+                                    <MicIcon className="w-5 h-5" /> Start
+                                </button>
+                            ) : (
+                                <button onClick={stopSession} className="bg-rose-600 hover:bg-rose-500 text-white px-8 py-3 rounded-xl font-bold flex items-center gap-2 transition-all">
+                                    <StopIcon className="w-5 h-5" /> Stop
+                                </button>
+                            )}
+                        </div>
                     </div>
                 )}
+
+                {mode === AppMode.WRITING && (
+                    <div className="flex-grow flex flex-col md:flex-row gap-4 overflow-hidden">
+                        <div className="flex-1 flex flex-col gap-4">
+                            <div className="flex-grow bg-slate-900/50 rounded-3xl border border-slate-800 p-6 flex flex-col">
+                                <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+                                    <DocumentCheckIcon className="w-6 h-6 text-cyan-400" /> Writing Workspace
+                                </h2>
+                                <textarea
+                                    className="flex-grow bg-transparent border-none outline-none resize-none text-lg text-slate-300 placeholder:text-slate-600 leading-relaxed"
+                                    placeholder="Paste your essay or text here to be evaluated under Cambridge criteria..."
+                                    value={writingInput} onChange={e => setWritingInput(e.target.value)}
+                                />
+                                <div className="mt-4 flex items-center gap-4 pt-4 border-t border-slate-800">
+                                    <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
+                                        <UploadIcon className="w-5 h-5" />
+                                        <span>{uploadedFile ? 'File Attached' : 'Upload Image/Doc'}</span>
+                                        <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleWritingFile} />
+                                    </label>
+                                    <div className="flex-grow" />
+                                    <LevelSelector level={writingLevel} setLevel={setWritingLevel} disabled={isCorrecting} />
+                                    <button
+                                        onClick={runWritingCorrection}
+                                        disabled={isCorrecting || (!writingInput.trim() && !uploadedFile)}
+                                        className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 px-6 py-2 rounded-xl font-bold flex items-center gap-2 transition-all"
+                                    >
+                                        {isCorrecting ? <LoadingSpinner className="w-5 h-5" /> : <SparklesIcon className="w-5 h-5" />}
+                                        Analyze
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex-1 bg-slate-900/50 rounded-3xl border border-slate-800 p-6 overflow-y-auto">
+                            {!writingResult && !isCorrecting && (
+                                <div className="h-full flex items-center justify-center text-slate-600 text-center italic">
+                                    Analysis results will appear here.
+                                </div>
+                            )}
+                            {isCorrecting && (
+                                <div className="h-full flex flex-col items-center justify-center gap-4">
+                                    <LoadingSpinner className="w-12 h-12 text-cyan-500" />
+                                    <p className="text-slate-400 animate-pulse">Evaluating based on Cambridge Assessment criteria...</p>
+                                </div>
+                            )}
+                            {writingResult && (
+                                <div className="space-y-6 animate-fade-in">
+                                    <div className="flex justify-between items-center bg-slate-800 p-4 rounded-2xl border border-slate-700">
+                                        <div className="text-sm font-bold uppercase tracking-wider text-slate-400">Overall Score</div>
+                                        <div className="text-3xl font-black text-cyan-400">{writingResult.score}/5</div>
+                                    </div>
+                                    <div>
+                                        <h3 className="font-bold text-slate-200 mb-2">Examiner's Summary</h3>
+                                        <p className="text-slate-400 text-sm leading-relaxed">{writingResult.summary}</p>
+                                    </div>
+                                    <div>
+                                        <h3 className="font-bold text-slate-200 mb-2">Key Improvements</h3>
+                                        <div className="space-y-3">
+                                            {writingResult.corrections.map((c: any, i: number) => (
+                                                <div key={i} className="bg-slate-800/50 p-3 rounded-xl border-l-4 border-yellow-500">
+                                                    <p className="text-xs text-rose-400 line-through mb-1">{c.original}</p>
+                                                    <p className="text-sm text-emerald-400 font-medium mb-1">{c.improved}</p>
+                                                    <p className="text-[11px] text-slate-500 italic">{c.explanation}</p>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <h3 className="font-bold text-slate-200 mb-2">Final Polished Version</h3>
+                                        <div className="bg-slate-950 p-4 rounded-xl text-slate-300 text-sm leading-relaxed border border-slate-800">
+                                            {writingResult.improvedVersion}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+
                 {mode === AppMode.LISTENING && (
-                    <div className="flex-grow bg-slate-800/50 rounded-2xl flex flex-col overflow-y-auto p-4 md:p-6 border border-slate-700">
-                        {isGenerating && (
-                            <div className="m-auto text-center text-slate-400">
-                                <LoadingSpinner className="w-12 h-12 mx-auto mb-4" />
-                                <p className="text-lg">Generating your exercise...</p>
-                                <p className="text-sm text-slate-500">This may take a moment.</p>
+                    <div className="flex-grow flex flex-col bg-slate-900/50 rounded-3xl border border-slate-800 p-8 overflow-y-auto">
+                        {!exercise && !isGenerating && (
+                            <div className="m-auto text-center space-y-4 max-w-md">
+                                <PlayIcon className="w-20 h-20 mx-auto text-cyan-500/20" />
+                                <h2 className="text-2xl font-bold">Listening Comprehension</h2>
+                                <p className="text-slate-500">Generate a professional dialogue with questions and multi-speaker audio to practice your ear.</p>
+                                <div className="flex items-center justify-center gap-4 py-4">
+                                    <LevelSelector level={listeningLevel} setLevel={setListeningLevel} disabled={isGenerating} />
+                                    <button onClick={generateListeningExercise} className="bg-purple-600 px-6 py-2 rounded-xl font-bold">Generate</button>
+                                </div>
                             </div>
                         )}
-                        {!isGenerating && !exercise && (
-                            <div className="m-auto text-center text-slate-400">
-                                <h2 className="text-2xl font-bold text-slate-200 mb-2">Listening Practice</h2>
-                                <p>Select a level and click "Generate Exercise" to begin.</p>
+                        {isGenerating && (
+                            <div className="m-auto flex flex-col items-center gap-4">
+                                <LoadingSpinner className="w-16 h-16 text-purple-500" />
+                                <p className="text-xl font-medium animate-pulse">Creating your exercise...</p>
                             </div>
                         )}
                         {exercise && (
-                            <div className="space-y-8 animate-fade-in">
-                                <div>
-                                    <h3 className="text-xl font-bold text-cyan-400 mb-4">Listen to the Conversation</h3>
-                                    <div className="flex items-center gap-4 p-4 bg-slate-900/50 rounded-lg">
-                                        <button
-                                            onClick={handleToggleListeningAudio}
-                                            disabled={!listeningAudioBuffer}
-                                            className="flex items-center justify-center gap-3 px-5 py-3 w-40 bg-cyan-600 text-white font-semibold rounded-lg shadow-md hover:bg-cyan-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-all duration-300"
-                                        >
-                                            {isListeningAudioPlaying ? <StopIcon className="w-5 h-5" /> : <PlayIcon className="w-5 h-5" />}
-                                            <span>{isListeningAudioPlaying ? 'Stop' : 'Play Audio'}</span>
-                                        </button>
-                                        {!listeningAudioBuffer && <div className="flex items-center gap-2 text-slate-400"><LoadingSpinner className="w-5 h-5" /> <span>Processing audio...</span></div>}
+                            <div className="space-y-8 max-w-2xl mx-auto w-full">
+                                <div className="bg-slate-800 p-6 rounded-3xl border border-slate-700 flex items-center justify-between">
+                                    <div>
+                                        <h3 className="text-lg font-bold">Dialogue Audio</h3>
+                                        <p className="text-sm text-slate-400">Listen carefully and answer below.</p>
+                                    </div>
+                                    <button
+                                        onClick={() => {
+                                            if (isListeningAudioPlaying) {
+                                                // Handle stop if logic added
+                                                setIsListeningAudioPlaying(false);
+                                            } else if (listeningAudioBuffer) {
+                                                const ctx = getOutputAudioContext();
+                                                const s = ctx.createBufferSource();
+                                                s.buffer = listeningAudioBuffer;
+                                                s.connect(ctx.destination);
+                                                s.onended = () => setIsListeningAudioPlaying(false);
+                                                s.start();
+                                                setIsListeningAudioPlaying(true);
+                                            }
+                                        }}
+                                        disabled={!listeningAudioBuffer}
+                                        className="bg-cyan-600 p-4 rounded-full shadow-lg shadow-cyan-900/20 hover:scale-105 transition-transform"
+                                    >
+                                        {isListeningAudioPlaying ? <StopIcon className="w-8 h-8" /> : <PlayIcon className="w-8 h-8" />}
+                                    </button>
+                                </div>
+                                <div className="space-y-4">
+                                    <h4 className="text-cyan-400 font-bold uppercase tracking-widest text-xs">Questions</h4>
+                                    <div className="bg-slate-800/50 p-6 rounded-3xl border border-slate-800 text-slate-200 leading-loose whitespace-pre-wrap">
+                                        {exercise.questions}
                                     </div>
                                 </div>
-                                <div>
-                                    <h3 className="text-xl font-bold text-cyan-400 mb-2">Comprehension Questions</h3>
-                                    <div className="p-4 bg-slate-900/50 rounded-lg whitespace-pre-wrap text-slate-200 leading-relaxed">{exercise.questions}</div>
-                                </div>
-                                <div>
-                                    <button onClick={() => setShowListeningTranscript(s => !s)} className="text-cyan-400 hover:text-cyan-300 font-semibold">
-                                        {showListeningTranscript ? 'Hide' : 'Show'} Transcript
-                                    </button>
-                                    {showListeningTranscript && (
-                                        <div className="mt-2 p-4 bg-slate-900/50 rounded-lg whitespace-pre-wrap text-slate-300 font-mono text-sm leading-relaxed animate-fade-in">
-                                            {exercise.transcript}
-                                        </div>
-                                    )}
-                                </div>
+                                <details className="group">
+                                    <summary className="cursor-pointer text-sm font-bold text-slate-500 hover:text-cyan-400 transition-colors list-none flex items-center gap-2">
+                                        <span className="group-open:rotate-90 transition-transform">▶</span> Show Transcript
+                                    </summary>
+                                    <div className="mt-4 bg-slate-950 p-6 rounded-2xl border border-slate-800 text-slate-400 font-mono text-sm leading-relaxed">
+                                        {exercise.transcript}
+                                    </div>
+                                </details>
+                                <button onClick={() => setExercise(null)} className="text-slate-600 text-sm hover:underline w-full text-center">Clear and generate new exercise</button>
                             </div>
                         )}
                     </div>
                 )}
-
-                <div className="flex-shrink-0 flex flex-col gap-4">
-                    <ModeSelector mode={mode} setMode={setMode} />
-                    {mode === AppMode.CONVERSATION && (
-                        <ConversationControls
-                            status={status}
-                            topic={topic}
-                            level={level}
-                            onTopicChange={setTopic}
-                            onLevelChange={setLevel}
-                            onStart={startSession}
-                            onStop={stopSession}
-                        />
-                    )}
-                    {mode === AppMode.LISTENING && (
-                        <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-4 shadow-2xl border border-slate-700 flex flex-col md:flex-row items-center gap-4">
-                            <LevelSelector level={listeningLevel} setLevel={setListeningLevel} disabled={isGenerating} />
-                            <div className="flex-grow" />
-                            <button
-                                onClick={generateListeningExercise}
-                                disabled={isGenerating}
-                                className="w-full md:w-auto flex items-center justify-center gap-2 px-6 py-3 bg-purple-600 text-white font-semibold rounded-lg shadow-md hover:bg-purple-700 disabled:bg-slate-600 disabled:cursor-not-allowed transition-all duration-300"
-                            >
-                                {isGenerating ? <LoadingSpinner className="w-5 h-5" /> : <SparklesIcon className="w-5 h-5" />}
-                                <span>{isGenerating ? 'Generating...' : 'Generate Exercise'}</span>
-                            </button>
-                        </div>
-                    )}
-                </div>
             </main>
         </div>
     );

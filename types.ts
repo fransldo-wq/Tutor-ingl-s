@@ -19,4 +19,5 @@ export enum SessionStatus {
 export enum AppMode {
     CONVERSATION = 'CONVERSATION',
     LISTENING = 'LISTENING',
+    WRITING = 'WRITING',
 }
