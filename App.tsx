@@ -144,10 +144,7 @@ export default function App() {
 
     const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
-    
-    // CAMBIO: Referencia al nuevo AudioWorklet en lugar de ScriptProcessor
     const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
-    
     const audioContextsRef = useRef<{ input?: AudioContext; output?: AudioContext }>({});
     const audioPlaybackQueueRef = useRef<{ nextStartTime: number, sources: Set<AudioBufferSourceNode> }>({ nextStartTime: 0, sources: new Set() });
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -179,7 +176,6 @@ export default function App() {
         streamRef.current?.getTracks().forEach(track => track.stop());
         streamRef.current = null;
         
-        // CAMBIO: Desconectar el nuevo AudioWorklet
         audioWorkletNodeRef.current?.disconnect();
         audioWorkletNodeRef.current = null;
         
@@ -206,7 +202,6 @@ export default function App() {
     const startSession = useCallback(async () => {
         if (!topic.trim()) return alert('Please enter a topic.');
         
-        // CAMBIO: Usar variable de Vite
         const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
         
         if (!apiKey) return setStatus(SessionStatus.ERROR);
@@ -221,7 +216,6 @@ export default function App() {
             const outCtx = getOutputAudioContext();
             const inCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: INPUT_SAMPLE_RATE });
             
-            // CAMBIO: Despertar el audio en iPhone y cargar el AudioWorklet
             if (outCtx.state === 'suspended') await outCtx.resume();
             if (inCtx.state === 'suspended') await inCtx.resume();
             await inCtx.audioWorklet.addModule('/audio-processor.js');
@@ -229,8 +223,8 @@ export default function App() {
             audioContextsRef.current.input = inCtx;
 
             sessionPromiseRef.current = ai.live.connect({
-                // CAMBIO: Modelo más nuevo que no corta cuando respiras
-                model: 'gemini-2.0-flash-exp',
+                // AQUÍ VOLVEMOS A TU MODELO ORIGINAL QUE SÍ FUNCIONA
+                model: 'gemini-2.5-flash-native-audio-preview-09-2025',
                 config: {
                     responseModalities: [Modality.AUDIO],
                     inputAudioTranscription: {},
@@ -243,7 +237,6 @@ export default function App() {
                         setStatus(SessionStatus.ACTIVE);
                         const source = inCtx.createMediaStreamSource(stream);
                         
-                        // CAMBIO: Iniciar el trabajador en segundo plano para iPhone
                         const workletNode = new AudioWorkletNode(inCtx, 'audio-processor');
                         workletNode.port.onmessage = (e) => {
                             sessionPromiseRef.current?.then(s => s.sendRealtimeInput({ media: createPcmBlob(e.data) }));
@@ -306,7 +299,6 @@ export default function App() {
     };
 
     const runWritingCorrection = async () => {
-        // CAMBIO: Usar variable de Vite
         const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
         
         if (!apiKey || (!writingInput.trim() && !uploadedFile)) return;
@@ -324,8 +316,8 @@ export default function App() {
             }
 
             const res = await ai.models.generateContent({
-                // CAMBIO: Modelo más nuevo
-                model: 'gemini-2.0-flash-exp',
+                // AQUÍ VOLVEMOS A TU MODELO ORIGINAL DE WRITING
+                model: 'gemini-3-flash-preview',
                 contents: { parts },
                 config: {
                     systemInstruction: WRITING_CORRECTOR_SYSTEM_INSTRUCTION.replace('{LEVEL}', writingLevel),
@@ -357,7 +349,6 @@ export default function App() {
     };
 
     const generateListeningExercise = async () => {
-        // CAMBIO: Usar variable de Vite
         const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
         
         if (!apiKey) return;
@@ -366,8 +357,8 @@ export default function App() {
             const ai = new GoogleGenAI({ apiKey });
             const topic = LISTENING_TOPICS[Math.floor(Math.random() * LISTENING_TOPICS.length)];
             const res = await ai.models.generateContent({
-                // CAMBIO: Modelo más nuevo
-                model: 'gemini-2.0-flash-exp',
+                // AQUÍ VOLVEMOS A TU MODELO ORIGINAL DE LISTENING
+                model: 'gemini-3-flash-preview',
                 contents: `Create listening exercise for level ${listeningLevel} on ${topic}`,
                 config: {
                     systemInstruction: LISTENING_SYSTEM_INSTRUCTION.replace('{LEVEL}', listeningLevel),
@@ -385,7 +376,8 @@ export default function App() {
             setExercise(json);
 
             const tts = await ai.models.generateContent({
-                model: "gemini-2.0-flash-exp",
+                // AQUÍ VOLVEMOS A TU MODELO ORIGINAL DE TTS (VOZ DE AUDIO)
+                model: "gemini-2.5-flash-preview-tts",
                 contents: [{ parts: [{ text: json.transcript }] }],
                 config: {
                     responseModalities: [Modality.AUDIO],
@@ -590,7 +582,6 @@ export default function App() {
                                                 setIsListeningAudioPlaying(false);
                                             } else if (listeningAudioBuffer) {
                                                 const ctx = getOutputAudioContext();
-                                                // CAMBIO: Despertar contexto en iPhone
                                                 if (ctx.state === 'suspended') await ctx.resume();
                                                 const s = ctx.createBufferSource();
                                                 s.buffer = listeningAudioBuffer;
