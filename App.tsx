@@ -153,7 +153,7 @@ export default function App() {
     const currentInputTranscription = useRef<string>('');
     const currentOutputTranscription = useRef<string>('');
 
-    // NUEVO: Rastreador para pausar y reanudar el audio del Listening correctamente
+    // Rastreador para pausar y reanudar el audio del Listening correctamente
     const listeningPlaybackRef = useRef<{ source: AudioBufferSourceNode | null, startTime: number, pausedAt: number }>({ source: null, startTime: 0, pausedAt: 0 });
 
     // Auto-scroll logic
@@ -227,7 +227,8 @@ export default function App() {
             audioContextsRef.current.input = inCtx;
 
             sessionPromiseRef.current = ai.live.connect({
-                model: 'gemini-3-flash-preview',
+                // MOTOR ORIGINAL FUNCIONAL PARA AUDIO
+                model: 'gemini-2.5-flash-native-audio-preview-09-2025',
                 config: {
                     responseModalities: [Modality.AUDIO],
                     inputAudioTranscription: {},
@@ -319,7 +320,8 @@ export default function App() {
             }
 
             const res = await ai.models.generateContent({
-                model: 'gemini-3.1-pro-preview',
+                // MOTOR ORIGINAL FUNCIONAL PARA WRITING
+                model: 'gemini-3-flash-preview',
                 contents: { parts },
                 config: {
                     systemInstruction: WRITING_CORRECTOR_SYSTEM_INSTRUCTION.replace('{LEVEL}', writingLevel),
@@ -347,7 +349,7 @@ export default function App() {
                 }
             });
             
-            // NUEVO: La escoba que limpia el texto para que la aplicación no se rompa al leer el resultado
+            // ESCOBA LIMPIADORA DE JSON (Garantiza que no falle al mostrar los resultados)
             const rawText = res.text || "";
             const cleanJson = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
             setWritingResult(JSON.parse(cleanJson));
@@ -361,7 +363,6 @@ export default function App() {
         if (!apiKey) return;
         setIsGenerating(true); setExercise(null); setListeningAudioBuffer(null);
         
-        // Resetear el rastreador de audio al generar un nuevo ejercicio
         listeningPlaybackRef.current = { source: null, startTime: 0, pausedAt: 0 };
         setIsListeningAudioPlaying(false);
 
@@ -369,6 +370,7 @@ export default function App() {
             const ai = new GoogleGenAI({ apiKey });
             const topic = LISTENING_TOPICS[Math.floor(Math.random() * LISTENING_TOPICS.length)];
             const res = await ai.models.generateContent({
+                // MOTOR ORIGINAL FUNCIONAL PARA EL TEXTO DEL LISTENING
                 model: 'gemini-3-flash-preview',
                 contents: `Create listening exercise for level ${listeningLevel} on ${topic}`,
                 config: {
@@ -387,7 +389,8 @@ export default function App() {
             setExercise(json);
 
             const tts = await ai.models.generateContent({
-                model: "gemini-3-flash-preview",
+                // MOTOR ORIGINAL FUNCIONAL PARA CREAR LAS VOCES
+                model: "gemini-2.5-flash-preview-tts",
                 contents: [{ parts: [{ text: json.transcript }] }],
                 config: {
                     responseModalities: [Modality.AUDIO],
@@ -590,7 +593,6 @@ export default function App() {
                                         onClick={async () => {
                                             const ctx = getOutputAudioContext();
                                             if (isListeningAudioPlaying) {
-                                                // NUEVO: Lógica real para pausar el sonido
                                                 if (listeningPlaybackRef.current.source) {
                                                     listeningPlaybackRef.current.pausedAt = ctx.currentTime - listeningPlaybackRef.current.startTime;
                                                     listeningPlaybackRef.current.source.stop();
@@ -599,14 +601,12 @@ export default function App() {
                                                 }
                                                 setIsListeningAudioPlaying(false);
                                             } else if (listeningAudioBuffer) {
-                                                // NUEVO: Lógica real para reanudar el sonido donde se quedó
                                                 if (ctx.state === 'suspended') await ctx.resume();
                                                 const s = ctx.createBufferSource();
                                                 s.buffer = listeningAudioBuffer;
                                                 s.connect(ctx.destination);
                                                 
                                                 s.onended = () => {
-                                                    // Solo resetear el botón si terminó naturalmente
                                                     if (listeningPlaybackRef.current.source === s) {
                                                         setIsListeningAudioPlaying(false);
                                                         listeningPlaybackRef.current.pausedAt = 0;
