@@ -200,8 +200,13 @@ export default function App() {
 
     const startSession = useCallback(async () => {
         if (!topic.trim()) return alert('Please enter a topic.');
-        const apiKey = process.env.API_KEY;
-        if (!apiKey) return setStatus(SessionStatus.ERROR);
+        
+        // CORRECCIÓN: Usamos import.meta.env de Vite en lugar de process.env
+        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+        if (!apiKey) {
+            alert('Falta la clave API. Asegúrate de configurarla en Vercel.');
+            return setStatus(SessionStatus.ERROR);
+        }
 
         setTranscript([]);
         setStatus(SessionStatus.CONNECTING);
@@ -210,8 +215,14 @@ export default function App() {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             streamRef.current = stream;
             const ai = new GoogleGenAI({ apiKey });
+            
             const outCtx = getOutputAudioContext();
             const inCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: INPUT_SAMPLE_RATE });
+            
+            // CORRECCIÓN IPHONE: Despertar los contextos de audio al hacer clic
+            if (outCtx.state === 'suspended') await outCtx.resume();
+            if (inCtx.state === 'suspended') await inCtx.resume();
+
             audioContextsRef.current.input = inCtx;
 
             sessionPromiseRef.current = ai.live.connect({
@@ -290,7 +301,8 @@ export default function App() {
     };
 
     const runWritingCorrection = async () => {
-        const apiKey = process.env.API_KEY;
+        // CORRECCIÓN: Usamos import.meta.env de Vite
+        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
         if (!apiKey || (!writingInput.trim() && !uploadedFile)) return;
         setIsCorrecting(true);
         setWritingResult(null);
@@ -338,7 +350,8 @@ export default function App() {
     };
 
     const generateListeningExercise = async () => {
-        const apiKey = process.env.API_KEY;
+        // CORRECCIÓN: Usamos import.meta.env de Vite
+        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
         if (!apiKey) return;
         setIsGenerating(true); setExercise(null); setListeningAudioBuffer(null);
         try {
@@ -564,12 +577,13 @@ export default function App() {
                                         <p className="text-sm text-slate-400">Listen carefully and answer below.</p>
                                     </div>
                                     <button
-                                        onClick={() => {
+                                        onClick={async () => {
                                             if (isListeningAudioPlaying) {
-                                                // Handle stop if logic added
                                                 setIsListeningAudioPlaying(false);
                                             } else if (listeningAudioBuffer) {
                                                 const ctx = getOutputAudioContext();
+                                                // CORRECCIÓN IPHONE: Despertar contexto al darle a Play
+                                                if (ctx.state === 'suspended') await ctx.resume();
                                                 const s = ctx.createBufferSource();
                                                 s.buffer = listeningAudioBuffer;
                                                 s.connect(ctx.destination);
