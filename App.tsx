@@ -9,26 +9,13 @@ const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
 
 const LISTENING_TOPICS = [
-    'recent breakthroughs in AI',
-    'the ethical implications of gene editing',
-    'exploring life on Mars',
-    'impact of social media',
-    'renewable energy debate',
-    'future of self-driving cars',
-    'how quantum computing works',
-    'film and TV reviews',
-    'history of Jazz',
-    'famous paintings',
-    'traveling in Southeast Asia',
-    'managing expatriate life',
-    'minimalism and simple living',
-    'public speaking techniques',
-    'learning styles',
-    'stress management',
-    'benefits of bilingualism',
+    'recent breakthroughs in AI', 'the ethical implications of gene editing', 'exploring life on Mars',
+    'impact of social media', 'renewable energy debate', 'future of self-driving cars',
+    'how quantum computing works', 'film and TV reviews', 'history of Jazz', 'famous paintings',
+    'traveling in Southeast Asia', 'managing expatriate life', 'minimalism and simple living',
+    'public speaking techniques', 'learning styles', 'stress management', 'benefits of bilingualism',
 ];
 
-// INSTRUCCIÓN REFORZADA: Le exigimos una pausa de 3 segundos por seguridad.
 const CONVERSATION_TUTOR_SYSTEM_INSTRUCTION = `You are a friendly, concise English language tutor. The user is a {LEVEL} level English learner.
 Topic: "{TOPIC}".
 
@@ -43,11 +30,7 @@ The user is a language learner. They WILL pause frequently to breathe, think, or
 Response Structure:
 1. Correction (If needed): Start with "Correction: [Corrected sentence]".
 2. Separator: Add "||".
-3. Conversational Content: Your short, natural response (1-3 sentences).
-
-Example:
-User: "I study English for 2 years."
-Tutor: "Correction: I have been studying English for two years.||That's a great milestone! Two years is usually when students start feeling more confident. What do you find most difficult about learning it?"`;
+3. Conversational Content: Your short, natural response (1-3 sentences).`;
 
 const LISTENING_SYSTEM_INSTRUCTION = `Generate an engaging listening comprehension exercise for level {LEVEL}.
 1. Create a realistic dialogue (250-400 words).
@@ -75,51 +58,61 @@ Output format (JSON):
 function createPcmBlob(data: Float32Array): Blob {
     const l = data.length;
     const int16 = new Int16Array(l);
-    for (let i = 0; i < l; i++) {
-        int16[i] = data[i] * 32768;
-    }
-    return {
-        data: encode(new Uint8Array(int16.buffer)),
-        mimeType: `audio/pcm;rate=${INPUT_SAMPLE_RATE}`,
-    };
+    for (let i = 0; i < l; i++) int16[i] = data[i] * 32768;
+    return { data: encode(new Uint8Array(int16.buffer)), mimeType: `audio/pcm;rate=${INPUT_SAMPLE_RATE}` };
 }
 
-async function fileToBase64(file: File): Promise<string> {
+// NUEVA HERRAMIENTA: Compresor automático de imágenes para evitar que la app se congele
+async function processImageFile(file: File): Promise<{data: string, type: string}> {
     return new Promise((resolve, reject) => {
+        if (file.type === 'application/pdf') {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => resolve({ data: (reader.result as string).split(',')[1], type: file.type });
+            reader.onerror = reject;
+            return;
+        }
+
         const reader = new FileReader();
         reader.readAsDataURL(file);
-        reader.onload = () => {
-            const base64String = (reader.result as string).split(',')[1];
-            resolve(base64String);
+        reader.onload = (event) => {
+            const img = new Image();
+            img.src = event.target?.result as string;
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                const MAX_WIDTH = 1200;
+                const MAX_HEIGHT = 1200;
+                let width = img.width;
+                let height = img.height;
+
+                if (width > height) {
+                    if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
+                } else {
+                    if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
+                }
+                
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx?.drawImage(img, 0, 0, width, height);
+                // Comprime la imagen a JPEG ligero
+                resolve({ data: canvas.toDataURL('image/jpeg', 0.8).split(',')[1], type: 'image/jpeg' });
+            };
+            img.onerror = reject;
         };
-        reader.onerror = (error) => reject(error);
+        reader.onerror = reject;
     });
 }
 
-// --- UI Components ---
-const LevelSelector: React.FC<{
-    level: string;
-    setLevel: (level: string) => void;
-    disabled: boolean;
-}> = ({ level, setLevel, disabled }) => (
+const LevelSelector: React.FC<{ level: string; setLevel: (level: string) => void; disabled: boolean; }> = ({ level, setLevel, disabled }) => (
     <div className="flex items-center gap-2">
         <span className="text-slate-400 font-medium">Target:</span>
-        <select
-            value={level}
-            onChange={(e) => setLevel(e.target.value)}
-            disabled={disabled}
-            className="bg-slate-700 text-slate-100 rounded-lg px-3 py-1 border border-slate-600 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-        >
-            <option value="A2">A2 (Elementary)</option>
-            <option value="B1">B1 (Intermediate)</option>
-            <option value="B2">B2 (Upper Intermediate)</option>
-            <option value="C1">C1 (Advanced)</option>
-            <option value="C2">C2 (Proficiency)</option>
+        <select value={level} onChange={(e) => setLevel(e.target.value)} disabled={disabled} className="bg-slate-700 text-slate-100 rounded-lg px-3 py-1 border border-slate-600 focus:ring-2 focus:ring-cyan-500 focus:outline-none">
+            <option value="A2">A2 (Elementary)</option><option value="B1">B1 (Intermediate)</option><option value="B2">B2 (Upper Intermediate)</option>
+            <option value="C1">C1 (Advanced)</option><option value="C2">C2 (Proficiency)</option>
         </select>
     </div>
 );
-
-// --- Main App Component ---
 
 export default function App() {
     const [mode, setMode] = useState<AppMode>(AppMode.CONVERSATION);
@@ -152,20 +145,12 @@ export default function App() {
     const audioContextsRef = useRef<{ input?: AudioContext; output?: AudioContext }>({});
     const audioPlaybackQueueRef = useRef<{ nextStartTime: number, sources: Set<AudioBufferSourceNode> }>({ nextStartTime: 0, sources: new Set() });
     const messagesEndRef = useRef<HTMLDivElement>(null);
-
     const currentInputTranscription = useRef<string>('');
     const currentOutputTranscription = useRef<string>('');
     const listeningPlaybackRef = useRef<{ source: AudioBufferSourceNode | null, startTime: number, pausedAt: number }>({ source: null, startTime: 0, pausedAt: 0 });
 
-    const scrollToBottom = useCallback(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, []);
-
-    useEffect(() => {
-        if (mode === AppMode.CONVERSATION) {
-            scrollToBottom();
-        }
-    }, [transcript, liveUserTranscript, isTutorReplying, mode, scrollToBottom]);
+    const scrollToBottom = useCallback(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, []);
+    useEffect(() => { if (mode === AppMode.CONVERSATION) scrollToBottom(); }, [transcript, liveUserTranscript, isTutorReplying, mode, scrollToBottom]);
 
     const getOutputAudioContext = useCallback(() => {
         let context = audioContextsRef.current.output;
@@ -179,40 +164,26 @@ export default function App() {
     const cleanupSessionResources = useCallback(() => {
         streamRef.current?.getTracks().forEach(track => track.stop());
         streamRef.current = null;
-        
         audioWorkletNodeRef.current?.disconnect();
         audioWorkletNodeRef.current = null;
-        
         audioPlaybackQueueRef.current.sources.forEach(source => { try { source.stop(); } catch (e) {} });
         audioPlaybackQueueRef.current.sources.clear();
         audioPlaybackQueueRef.current.nextStartTime = 0;
-        if (audioContextsRef.current.input) {
-            audioContextsRef.current.input.close().catch(console.error);
-            delete audioContextsRef.current.input;
-        }
+        if (audioContextsRef.current.input) { audioContextsRef.current.input.close().catch(console.error); delete audioContextsRef.current.input; }
     }, []);
 
     const stopSession = useCallback(async () => {
-        if (sessionPromiseRef.current) {
-            try { (await sessionPromiseRef.current).close(); } catch (e) {}
-            sessionPromiseRef.current = null;
-        }
+        if (sessionPromiseRef.current) { try { (await sessionPromiseRef.current).close(); } catch (e) {} sessionPromiseRef.current = null; }
         cleanupSessionResources();
-        setIsTutorReplying(false);
-        setLiveUserTranscript('');
-        setStatus(SessionStatus.INACTIVE);
+        setIsTutorReplying(false); setLiveUserTranscript(''); setStatus(SessionStatus.INACTIVE);
     }, [cleanupSessionResources]);
 
     const startSession = useCallback(async () => {
         if (!topic.trim()) return alert('Please enter a topic.');
-        
         const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-        
         if (!apiKey) return setStatus(SessionStatus.ERROR);
 
-        setTranscript([]);
-        setStatus(SessionStatus.CONNECTING);
-        
+        setTranscript([]); setStatus(SessionStatus.CONNECTING);
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             streamRef.current = stream;
@@ -223,15 +194,13 @@ export default function App() {
             if (outCtx.state === 'suspended') await outCtx.resume();
             if (inCtx.state === 'suspended') await inCtx.resume();
             await inCtx.audioWorklet.addModule('/audio-processor.js');
-            
             audioContextsRef.current.input = inCtx;
 
             sessionPromiseRef.current = ai.live.connect({
                 model: 'gemini-2.5-flash-native-audio-preview-09-2025',
                 config: {
                     responseModalities: [Modality.AUDIO],
-                    inputAudioTranscription: {},
-                    outputAudioTranscription: {},
+                    inputAudioTranscription: {}, outputAudioTranscription: {},
                     speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
                     systemInstruction: CONVERSATION_TUTOR_SYSTEM_INSTRUCTION.replace('{TOPIC}', topic).replace('{LEVEL}', level),
                 },
@@ -239,13 +208,9 @@ export default function App() {
                     onopen: () => {
                         setStatus(SessionStatus.ACTIVE);
                         const source = inCtx.createMediaStreamSource(stream);
-                        
                         const workletNode = new AudioWorkletNode(inCtx, 'audio-processor');
-                        workletNode.port.onmessage = (e) => {
-                            sessionPromiseRef.current?.then(s => s.sendRealtimeInput({ media: createPcmBlob(e.data) }));
-                        };
-                        source.connect(workletNode);
-                        workletNode.connect(inCtx.destination);
+                        workletNode.port.onmessage = (e) => { sessionPromiseRef.current?.then(s => s.sendRealtimeInput({ media: createPcmBlob(e.data) })); };
+                        source.connect(workletNode); workletNode.connect(inCtx.destination);
                         audioWorkletNodeRef.current = workletNode;
                     },
                     onmessage: async (msg: LiveServerMessage) => {
@@ -262,7 +227,6 @@ export default function App() {
                             const output = currentOutputTranscription.current.trim();
                             currentInputTranscription.current = ''; currentOutputTranscription.current = '';
                             setLiveUserTranscript(''); setIsTutorReplying(false);
-
                             setTranscript(prev => {
                                 const next = [...prev];
                                 if (input) next.push({ speaker: Speaker.USER, text: input });
@@ -280,8 +244,7 @@ export default function App() {
                             const start = Math.max(audioPlaybackQueueRef.current.nextStartTime, outCtx.currentTime);
                             const buffer = await decodeAudioData(decode(b64), outCtx, OUTPUT_SAMPLE_RATE, 1);
                             const node = outCtx.createBufferSource();
-                            node.buffer = buffer;
-                            node.connect(outCtx.destination);
+                            node.buffer = buffer; node.connect(outCtx.destination);
                             node.onended = () => audioPlaybackQueueRef.current.sources.delete(node);
                             node.start(start);
                             audioPlaybackQueueRef.current.nextStartTime = start + buffer.duration;
@@ -294,23 +257,28 @@ export default function App() {
         } catch (e) { stopSession(); }
     }, [topic, level, stopSession, getOutputAudioContext]);
 
+    // Usando el nuevo compresor para los archivos subidos
     const handleWritingFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
-        const base64 = await fileToBase64(file);
-        setUploadedFile({ data: base64, type: file.type });
+        try {
+            const processed = await processImageFile(file);
+            setUploadedFile(processed);
+        } catch (err) { console.error("Error al procesar archivo:", err); }
     };
 
-    // NUEVA FUNCIÓN: Captura imágenes pegadas directamente del portapapeles
+    // Usando el nuevo compresor para las capturas pegadas (Ctrl+V)
     const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
         const items = e.clipboardData.items;
         for (let i = 0; i < items.length; i++) {
             if (items[i].type.indexOf('image') !== -1) {
                 const blob = items[i].getAsFile();
                 if (blob) {
-                    const base64 = await fileToBase64(blob as File);
-                    setUploadedFile({ data: base64, type: blob.type });
-                    e.preventDefault(); // Evita que el navegador intente pegar texto raro
+                    e.preventDefault();
+                    try {
+                        const processed = await processImageFile(blob as File);
+                        setUploadedFile(processed);
+                    } catch (err) { console.error("Error procesando captura:", err); }
                 }
             }
         }
@@ -318,7 +286,6 @@ export default function App() {
 
     const runWritingCorrection = async () => {
         const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-        
         if (!apiKey || (!writingInput.trim() && !uploadedFile)) return;
         setIsCorrecting(true);
         setWritingResult(null);
@@ -328,14 +295,13 @@ export default function App() {
             const parts: any[] = [{ text: `Correct this English text based on level ${writingLevel}. Consider Cambridge criteria.` }];
             if (writingInput) parts.push({ text: `Content: ${writingInput}` });
             if (uploadedFile) {
-                parts.push({
-                    inlineData: { data: uploadedFile.data, mimeType: uploadedFile.type }
-                });
+                parts.push({ inlineData: { data: uploadedFile.data, mimeType: uploadedFile.type } });
             }
 
+            // Forzamos el array de contents para garantizar compatibilidad total
             const res = await ai.models.generateContent({
                 model: 'gemini-3-flash-preview',
-                contents: { parts },
+                contents: [{ role: 'user', parts: parts }],
                 config: {
                     systemInstruction: WRITING_CORRECTOR_SYSTEM_INSTRUCTION.replace('{LEVEL}', writingLevel),
                     responseMimeType: "application/json",
@@ -349,9 +315,7 @@ export default function App() {
                                 items: {
                                     type: Type.OBJECT,
                                     properties: {
-                                        original: { type: Type.STRING },
-                                        improved: { type: Type.STRING },
-                                        explanation: { type: Type.STRING }
+                                        original: { type: Type.STRING }, improved: { type: Type.STRING }, explanation: { type: Type.STRING }
                                     }
                                 }
                             },
@@ -366,15 +330,18 @@ export default function App() {
             const cleanJson = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
             setWritingResult(JSON.parse(cleanJson));
 
-        } catch (e) { alert("Correction failed."); } finally { setIsCorrecting(false); }
+        } catch (e: any) { 
+            console.error(e);
+            alert("Error en la corrección: " + (e.message || "Error desconocido.")); 
+        } finally { 
+            setIsCorrecting(false); 
+        }
     };
 
     const generateListeningExercise = async () => {
         const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-        
         if (!apiKey) return;
         setIsGenerating(true); setExercise(null); setListeningAudioBuffer(null);
-        
         listeningPlaybackRef.current = { source: null, startTime: 0, pausedAt: 0 };
         setIsListeningAudioPlaying(false);
 
@@ -389,10 +356,7 @@ export default function App() {
                     responseMimeType: "application/json",
                     responseSchema: {
                         type: Type.OBJECT,
-                        properties: {
-                            transcript: { type: Type.STRING },
-                            questions: { type: Type.STRING }
-                        }
+                        properties: { transcript: { type: Type.STRING }, questions: { type: Type.STRING } }
                     }
                 }
             });
@@ -508,7 +472,7 @@ export default function App() {
                                     placeholder="Paste your essay or a screenshot here to be evaluated under Cambridge criteria..."
                                     value={writingInput} 
                                     onChange={e => setWritingInput(e.target.value)}
-                                    onPaste={handlePaste} // AQUÍ ACTIVAMOS LA DETECCIÓN DE CAPTURAS
+                                    onPaste={handlePaste}
                                 />
                                 <div className="mt-4 flex items-center gap-4 pt-4 border-t border-slate-800">
                                     <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
