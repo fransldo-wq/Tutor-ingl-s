@@ -28,6 +28,7 @@ const LISTENING_TOPICS = [
     'benefits of bilingualism',
 ];
 
+// AQUÍ ESTÁ LA NUEVA INSTRUCCIÓN PARA QUE NO TE INTERRUMPA
 const CONVERSATION_TUTOR_SYSTEM_INSTRUCTION = `You are a friendly, concise English language tutor. The user is a {LEVEL} level English learner.
 Topic: "{TOPIC}".
 
@@ -224,8 +225,8 @@ export default function App() {
             audioContextsRef.current.input = inCtx;
 
             sessionPromiseRef.current = ai.live.connect({
-                // AQUÍ VOLVEMOS A TU MODELO ORIGINAL QUE SÍ FUNCIONA
-                model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+                // NUEVO MODELO DE TU LISTA: Mucho más rápido y con soporte de audio
+                model: 'gemini-3-flash-preview',
                 config: {
                     responseModalities: [Modality.AUDIO],
                     inputAudioTranscription: {},
@@ -317,8 +318,8 @@ export default function App() {
             }
 
             const res = await ai.models.generateContent({
-                // AQUÍ VOLVEMOS A TU MODELO ORIGINAL DE WRITING
-                model: 'gemini-3-flash-preview',
+                // NUEVO MODELO DE TU LISTA: El cerebro más potente para corregir gramática
+                model: 'gemini-3.1-pro-preview',
                 contents: { parts },
                 config: {
                     systemInstruction: WRITING_CORRECTOR_SYSTEM_INSTRUCTION.replace('{LEVEL}', writingLevel),
@@ -358,7 +359,7 @@ export default function App() {
             const ai = new GoogleGenAI({ apiKey });
             const topic = LISTENING_TOPICS[Math.floor(Math.random() * LISTENING_TOPICS.length)];
             const res = await ai.models.generateContent({
-                // AQUÍ VOLVEMOS A TU MODELO ORIGINAL DE LISTENING
+                // NUEVO MODELO DE TU LISTA: Para crear el texto del ejercicio
                 model: 'gemini-3-flash-preview',
                 contents: `Create listening exercise for level ${listeningLevel} on ${topic}`,
                 config: {
@@ -377,8 +378,8 @@ export default function App() {
             setExercise(json);
 
             const tts = await ai.models.generateContent({
-                // AQUÍ VOLVEMOS A TU MODELO ORIGINAL DE TTS (VOZ DE AUDIO)
-                model: "gemini-2.5-flash-preview-tts",
+                // NUEVO MODELO DE TU LISTA: Para generar las voces (TTS)
+                model: "gemini-3-flash-preview",
                 contents: [{ parts: [{ text: json.transcript }] }],
                 config: {
                     responseModalities: [Modality.AUDIO],
