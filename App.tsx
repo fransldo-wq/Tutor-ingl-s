@@ -28,6 +28,7 @@ const LISTENING_TOPICS = [
     'benefits of bilingualism',
 ];
 
+// INSTRUCCIÓN REFORZADA: Le exigimos una pausa de 3 segundos por seguridad.
 const CONVERSATION_TUTOR_SYSTEM_INSTRUCTION = `You are a friendly, concise English language tutor. The user is a {LEVEL} level English learner.
 Topic: "{TOPIC}".
 
@@ -35,7 +36,9 @@ Primary Goal:
 - Act like a real tutor: be encouraging and natural, but keep your responses brief (1-3 sentences maximum).
 - Do not overwhelm the user with long explanations. Focus on keeping the conversation moving.
 - Provide a correction if they make a mistake, then continue the chat briefly.
-- EXTREMELY IMPORTANT: The user is a language learner and will pause frequently to breathe, think, or find the right word. You MUST BE PATIENT. Do not interrupt. Wait until you are absolutely certain the user has finished their complete thought before you reply.
+
+CRITICAL RULE FOR INTERRUPTIONS:
+The user is a language learner. They WILL pause frequently to breathe, think, or search for words. You MUST BE EXTREMELY PATIENT. You MUST wait for at least 3 full seconds of absolute silence before you assume they have finished their sentence. NEVER interrupt them while they are thinking.
 
 Response Structure:
 1. Correction (If needed): Start with "Correction: [Corrected sentence]".
@@ -152,11 +155,8 @@ export default function App() {
 
     const currentInputTranscription = useRef<string>('');
     const currentOutputTranscription = useRef<string>('');
-
-    // Rastreador para pausar y reanudar el audio del Listening correctamente
     const listeningPlaybackRef = useRef<{ source: AudioBufferSourceNode | null, startTime: number, pausedAt: number }>({ source: null, startTime: 0, pausedAt: 0 });
 
-    // Auto-scroll logic
     const scrollToBottom = useCallback(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, []);
@@ -227,7 +227,6 @@ export default function App() {
             audioContextsRef.current.input = inCtx;
 
             sessionPromiseRef.current = ai.live.connect({
-                // MOTOR ORIGINAL FUNCIONAL PARA AUDIO
                 model: 'gemini-2.5-flash-native-audio-preview-09-2025',
                 config: {
                     responseModalities: [Modality.AUDIO],
@@ -302,6 +301,21 @@ export default function App() {
         setUploadedFile({ data: base64, type: file.type });
     };
 
+    // NUEVA FUNCIÓN: Captura imágenes pegadas directamente del portapapeles
+    const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+        const items = e.clipboardData.items;
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].type.indexOf('image') !== -1) {
+                const blob = items[i].getAsFile();
+                if (blob) {
+                    const base64 = await fileToBase64(blob as File);
+                    setUploadedFile({ data: base64, type: blob.type });
+                    e.preventDefault(); // Evita que el navegador intente pegar texto raro
+                }
+            }
+        }
+    };
+
     const runWritingCorrection = async () => {
         const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
         
@@ -320,7 +334,6 @@ export default function App() {
             }
 
             const res = await ai.models.generateContent({
-                // MOTOR ORIGINAL FUNCIONAL PARA WRITING
                 model: 'gemini-3-flash-preview',
                 contents: { parts },
                 config: {
@@ -349,7 +362,6 @@ export default function App() {
                 }
             });
             
-            // ESCOBA LIMPIADORA DE JSON (Garantiza que no falle al mostrar los resultados)
             const rawText = res.text || "";
             const cleanJson = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
             setWritingResult(JSON.parse(cleanJson));
@@ -370,7 +382,6 @@ export default function App() {
             const ai = new GoogleGenAI({ apiKey });
             const topic = LISTENING_TOPICS[Math.floor(Math.random() * LISTENING_TOPICS.length)];
             const res = await ai.models.generateContent({
-                // MOTOR ORIGINAL FUNCIONAL PARA EL TEXTO DEL LISTENING
                 model: 'gemini-3-flash-preview',
                 contents: `Create listening exercise for level ${listeningLevel} on ${topic}`,
                 config: {
@@ -389,7 +400,6 @@ export default function App() {
             setExercise(json);
 
             const tts = await ai.models.generateContent({
-                // MOTOR ORIGINAL FUNCIONAL PARA CREAR LAS VOCES
                 model: "gemini-2.5-flash-preview-tts",
                 contents: [{ parts: [{ text: json.transcript }] }],
                 config: {
@@ -495,13 +505,17 @@ export default function App() {
                                 </h2>
                                 <textarea
                                     className="flex-grow bg-transparent border-none outline-none resize-none text-lg text-slate-300 placeholder:text-slate-600 leading-relaxed"
-                                    placeholder="Paste your essay or text here to be evaluated under Cambridge criteria..."
-                                    value={writingInput} onChange={e => setWritingInput(e.target.value)}
+                                    placeholder="Paste your essay or a screenshot here to be evaluated under Cambridge criteria..."
+                                    value={writingInput} 
+                                    onChange={e => setWritingInput(e.target.value)}
+                                    onPaste={handlePaste} // AQUÍ ACTIVAMOS LA DETECCIÓN DE CAPTURAS
                                 />
                                 <div className="mt-4 flex items-center gap-4 pt-4 border-t border-slate-800">
                                     <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
                                         <UploadIcon className="w-5 h-5" />
-                                        <span>{uploadedFile ? 'File Attached' : 'Upload Image/Doc'}</span>
+                                        <span className={uploadedFile ? "text-cyan-400 font-bold" : ""}>
+                                            {uploadedFile ? '✓ Image/File Attached' : 'Upload Image/Doc'}
+                                        </span>
                                         <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleWritingFile} />
                                     </label>
                                     <div className="flex-grow" />
