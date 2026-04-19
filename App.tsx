@@ -62,7 +62,6 @@ function createPcmBlob(data: Float32Array): Blob {
     return { data: encode(new Uint8Array(int16.buffer)), mimeType: `audio/pcm;rate=${INPUT_SAMPLE_RATE}` };
 }
 
-// NUEVA HERRAMIENTA: Compresor automático de imágenes para evitar que la app se congele
 async function processImageFile(file: File): Promise<{data: string, type: string}> {
     return new Promise((resolve, reject) => {
         if (file.type === 'application/pdf') {
@@ -95,7 +94,6 @@ async function processImageFile(file: File): Promise<{data: string, type: string
                 canvas.height = height;
                 const ctx = canvas.getContext('2d');
                 ctx?.drawImage(img, 0, 0, width, height);
-                // Comprime la imagen a JPEG ligero
                 resolve({ data: canvas.toDataURL('image/jpeg', 0.8).split(',')[1], type: 'image/jpeg' });
             };
             img.onerror = reject;
@@ -164,8 +162,10 @@ export default function App() {
     const cleanupSessionResources = useCallback(() => {
         streamRef.current?.getTracks().forEach(track => track.stop());
         streamRef.current = null;
-        audioWorkletNodeRef.current?.disconnect();
-        audioWorkletNodeRef.current = null;
+        if (audioWorkletNodeRef.current) {
+            audioWorkletNodeRef.current.disconnect();
+            audioWorkletNodeRef.current = null;
+        }
         audioPlaybackQueueRef.current.sources.forEach(source => { try { source.stop(); } catch (e) {} });
         audioPlaybackQueueRef.current.sources.clear();
         audioPlaybackQueueRef.current.nextStartTime = 0;
@@ -257,7 +257,6 @@ export default function App() {
         } catch (e) { stopSession(); }
     }, [topic, level, stopSession, getOutputAudioContext]);
 
-    // Usando el nuevo compresor para los archivos subidos
     const handleWritingFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -267,7 +266,6 @@ export default function App() {
         } catch (err) { console.error("Error al procesar archivo:", err); }
     };
 
-    // Usando el nuevo compresor para las capturas pegadas (Ctrl+V)
     const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
         const items = e.clipboardData.items;
         for (let i = 0; i < items.length; i++) {
@@ -290,17 +288,22 @@ export default function App() {
         setIsCorrecting(true);
         setWritingResult(null);
 
+        console.log("-> 1. Iniciando corrección...");
+
         try {
             const ai = new GoogleGenAI({ apiKey });
             const parts: any[] = [{ text: `Correct this English text based on level ${writingLevel}. Consider Cambridge criteria.` }];
             if (writingInput) parts.push({ text: `Content: ${writingInput}` });
             if (uploadedFile) {
+                console.log("-> 2. Imagen detectada y adjuntada. Tipo:", uploadedFile.type);
                 parts.push({ inlineData: { data: uploadedFile.data, mimeType: uploadedFile.type } });
             }
 
-            // Forzamos el array de contents para garantizar compatibilidad total
+            console.log("-> 3. Solicitando análisis a Gemini 1.5 Flash...");
+
+            // CAMBIO CLAVE: Usamos gemini-1.5-flash, el rey de la estabilidad con imágenes y JSON
             const res = await ai.models.generateContent({
-                model: 'gemini-3-flash-preview',
+                model: 'gemini-1.5-flash',
                 contents: [{ role: 'user', parts: parts }],
                 config: {
                     systemInstruction: WRITING_CORRECTOR_SYSTEM_INSTRUCTION.replace('{LEVEL}', writingLevel),
@@ -326,13 +329,14 @@ export default function App() {
                 }
             });
             
+            console.log("-> 4. ¡Respuesta recibida con éxito!");
             const rawText = res.text || "";
             const cleanJson = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
             setWritingResult(JSON.parse(cleanJson));
 
         } catch (e: any) { 
-            console.error(e);
-            alert("Error en la corrección: " + (e.message || "Error desconocido.")); 
+            console.error("-> ERROR FATAL DURANTE LA CORRECCIÓN:", e);
+            alert("Error en la corrección: " + (e.message || "Error de red o modelo. Revisa la consola.")); 
         } finally { 
             setIsCorrecting(false); 
         }
