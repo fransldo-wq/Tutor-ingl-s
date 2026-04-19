@@ -7,7 +7,6 @@ import { MicIcon, StopIcon, LoadingSpinner, SparklesIcon, PlayIcon, DocumentChec
 // --- Helper Functions & Constants ---
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
-const SCRIPT_PROCESSOR_BUFFER_SIZE = 4096;
 
 const LISTENING_TOPICS = [
     'recent breakthroughs in AI',
@@ -145,7 +144,10 @@ export default function App() {
 
     const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
-    const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
+    
+    // CAMBIO: Referencia al nuevo AudioWorklet en lugar de ScriptProcessor
+    const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
+    
     const audioContextsRef = useRef<{ input?: AudioContext; output?: AudioContext }>({});
     const audioPlaybackQueueRef = useRef<{ nextStartTime: number, sources: Set<AudioBufferSourceNode> }>({ nextStartTime: 0, sources: new Set() });
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -176,8 +178,11 @@ export default function App() {
     const cleanupSessionResources = useCallback(() => {
         streamRef.current?.getTracks().forEach(track => track.stop());
         streamRef.current = null;
-        audioProcessorRef.current?.disconnect();
-        audioProcessorRef.current = null;
+        
+        // CAMBIO: Desconectar el nuevo AudioWorklet
+        audioWorkletNodeRef.current?.disconnect();
+        audioWorkletNodeRef.current = null;
+        
         audioPlaybackQueueRef.current.sources.forEach(source => { try { source.stop(); } catch (e) {} });
         audioPlaybackQueueRef.current.sources.clear();
         audioPlaybackQueueRef.current.nextStartTime = 0;
@@ -201,12 +206,10 @@ export default function App() {
     const startSession = useCallback(async () => {
         if (!topic.trim()) return alert('Please enter a topic.');
         
-        // CORRECCIÓN: Usamos import.meta.env de Vite en lugar de process.env
+        // CAMBIO: Usar variable de Vite
         const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-        if (!apiKey) {
-            alert('Falta la clave API. Asegúrate de configurarla en Vercel.');
-            return setStatus(SessionStatus.ERROR);
-        }
+        
+        if (!apiKey) return setStatus(SessionStatus.ERROR);
 
         setTranscript([]);
         setStatus(SessionStatus.CONNECTING);
@@ -215,18 +218,19 @@ export default function App() {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             streamRef.current = stream;
             const ai = new GoogleGenAI({ apiKey });
-            
             const outCtx = getOutputAudioContext();
             const inCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: INPUT_SAMPLE_RATE });
             
-            // CORRECCIÓN IPHONE: Despertar los contextos de audio al hacer clic
+            // CAMBIO: Despertar el audio en iPhone y cargar el AudioWorklet
             if (outCtx.state === 'suspended') await outCtx.resume();
             if (inCtx.state === 'suspended') await inCtx.resume();
-
+            await inCtx.audioWorklet.addModule('/audio-processor.js');
+            
             audioContextsRef.current.input = inCtx;
 
             sessionPromiseRef.current = ai.live.connect({
-                model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+                // CAMBIO: Modelo más nuevo que no corta cuando respiras
+                model: 'gemini-2.0-flash-exp',
                 config: {
                     responseModalities: [Modality.AUDIO],
                     inputAudioTranscription: {},
@@ -238,14 +242,15 @@ export default function App() {
                     onopen: () => {
                         setStatus(SessionStatus.ACTIVE);
                         const source = inCtx.createMediaStreamSource(stream);
-                        const scriptProcessor = inCtx.createScriptProcessor(SCRIPT_PROCESSOR_BUFFER_SIZE, 1, 1);
-                        scriptProcessor.onaudioprocess = (e) => {
-                            const inputData = e.inputBuffer.getChannelData(0);
-                            sessionPromiseRef.current?.then(s => s.sendRealtimeInput({ media: createPcmBlob(inputData) }));
+                        
+                        // CAMBIO: Iniciar el trabajador en segundo plano para iPhone
+                        const workletNode = new AudioWorkletNode(inCtx, 'audio-processor');
+                        workletNode.port.onmessage = (e) => {
+                            sessionPromiseRef.current?.then(s => s.sendRealtimeInput({ media: createPcmBlob(e.data) }));
                         };
-                        source.connect(scriptProcessor);
-                        scriptProcessor.connect(inCtx.destination);
-                        audioProcessorRef.current = scriptProcessor;
+                        source.connect(workletNode);
+                        workletNode.connect(inCtx.destination);
+                        audioWorkletNodeRef.current = workletNode;
                     },
                     onmessage: async (msg: LiveServerMessage) => {
                         if (msg.serverContent?.inputTranscription) {
@@ -301,8 +306,9 @@ export default function App() {
     };
 
     const runWritingCorrection = async () => {
-        // CORRECCIÓN: Usamos import.meta.env de Vite
+        // CAMBIO: Usar variable de Vite
         const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+        
         if (!apiKey || (!writingInput.trim() && !uploadedFile)) return;
         setIsCorrecting(true);
         setWritingResult(null);
@@ -318,7 +324,8 @@ export default function App() {
             }
 
             const res = await ai.models.generateContent({
-                model: 'gemini-3-flash-preview',
+                // CAMBIO: Modelo más nuevo
+                model: 'gemini-2.0-flash-exp',
                 contents: { parts },
                 config: {
                     systemInstruction: WRITING_CORRECTOR_SYSTEM_INSTRUCTION.replace('{LEVEL}', writingLevel),
@@ -350,15 +357,17 @@ export default function App() {
     };
 
     const generateListeningExercise = async () => {
-        // CORRECCIÓN: Usamos import.meta.env de Vite
+        // CAMBIO: Usar variable de Vite
         const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+        
         if (!apiKey) return;
         setIsGenerating(true); setExercise(null); setListeningAudioBuffer(null);
         try {
             const ai = new GoogleGenAI({ apiKey });
             const topic = LISTENING_TOPICS[Math.floor(Math.random() * LISTENING_TOPICS.length)];
             const res = await ai.models.generateContent({
-                model: 'gemini-3-flash-preview',
+                // CAMBIO: Modelo más nuevo
+                model: 'gemini-2.0-flash-exp',
                 contents: `Create listening exercise for level ${listeningLevel} on ${topic}`,
                 config: {
                     systemInstruction: LISTENING_SYSTEM_INSTRUCTION.replace('{LEVEL}', listeningLevel),
@@ -376,7 +385,7 @@ export default function App() {
             setExercise(json);
 
             const tts = await ai.models.generateContent({
-                model: "gemini-2.5-flash-preview-tts",
+                model: "gemini-2.0-flash-exp",
                 contents: [{ parts: [{ text: json.transcript }] }],
                 config: {
                     responseModalities: [Modality.AUDIO],
@@ -450,7 +459,6 @@ export default function App() {
                                     </div>
                                 </div>
                             )}
-                            {/* Hidden element to mark the end of the conversation */}
                             <div ref={messagesEndRef} className="h-1 w-full" />
                         </div>
                         <div className="bg-slate-900 border border-slate-800 p-4 rounded-3xl shadow-2xl flex flex-col md:flex-row items-center gap-4">
@@ -582,7 +590,7 @@ export default function App() {
                                                 setIsListeningAudioPlaying(false);
                                             } else if (listeningAudioBuffer) {
                                                 const ctx = getOutputAudioContext();
-                                                // CORRECCIÓN IPHONE: Despertar contexto al darle a Play
+                                                // CAMBIO: Despertar contexto en iPhone
                                                 if (ctx.state === 'suspended') await ctx.resume();
                                                 const s = ctx.createBufferSource();
                                                 s.buffer = listeningAudioBuffer;
