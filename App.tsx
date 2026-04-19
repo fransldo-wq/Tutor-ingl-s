@@ -266,7 +266,20 @@ export default function App() {
         } catch (err) { console.error("Error al procesar archivo:", err); }
     };
 
+    // ESCUDO INTERCEPTOR DE TEXTOS RAROS
     const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+        // 1. Verificar si lo que se pega es un texto que en realidad es el código de una imagen
+        const pastedText = e.clipboardData.getData('text');
+        if (pastedText && pastedText.startsWith('data:image')) {
+            e.preventDefault(); // Detenemos la acción
+            const type = pastedText.split(';')[0].split(':')[1];
+            const data = pastedText.split(',')[1];
+            setUploadedFile({ data, type }); // Lo subimos correctamente como archivo
+            setTimeout(() => setWritingInput(''), 50); // Nos aseguramos de borrar la basura del texto
+            return;
+        }
+
+        // 2. Comportamiento normal si es una imagen real del portapapeles
         const items = e.clipboardData.items;
         for (let i = 0; i < items.length; i++) {
             if (items[i].type.indexOf('image') !== -1) {
@@ -284,24 +297,26 @@ export default function App() {
 
     const runWritingCorrection = async () => {
         const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+        
+        // SEGUNDA CAPA DE SEGURIDAD
+        if (writingInput.length > 20000 && writingInput.includes('base64')) {
+            alert("⚠️ El recuadro contiene el código de una imagen, no un texto normal. Por favor, bóórralo entero y vuelve a pegarlo.");
+            setWritingInput('');
+            return;
+        }
+
         if (!apiKey || (!writingInput.trim() && !uploadedFile)) return;
         setIsCorrecting(true);
         setWritingResult(null);
-
-        console.log("-> 1. Iniciando corrección...");
 
         try {
             const ai = new GoogleGenAI({ apiKey });
             const parts: any[] = [{ text: `Correct this English text based on level ${writingLevel}. Consider Cambridge criteria.` }];
             if (writingInput) parts.push({ text: `Content: ${writingInput}` });
             if (uploadedFile) {
-                console.log("-> 2. Imagen detectada y adjuntada. Tipo:", uploadedFile.type);
                 parts.push({ inlineData: { data: uploadedFile.data, mimeType: uploadedFile.type } });
             }
 
-            console.log("-> 3. Solicitando análisis a Gemini 1.5 Flash...");
-
-            // CAMBIO CLAVE: Usamos gemini-1.5-flash, el rey de la estabilidad con imágenes y JSON
             const res = await ai.models.generateContent({
                 model: 'gemini-1.5-flash',
                 contents: [{ role: 'user', parts: parts }],
@@ -329,14 +344,12 @@ export default function App() {
                 }
             });
             
-            console.log("-> 4. ¡Respuesta recibida con éxito!");
             const rawText = res.text || "";
             const cleanJson = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
             setWritingResult(JSON.parse(cleanJson));
 
         } catch (e: any) { 
-            console.error("-> ERROR FATAL DURANTE LA CORRECCIÓN:", e);
-            alert("Error en la corrección: " + (e.message || "Error de red o modelo. Revisa la consola.")); 
+            alert("Error en la corrección: " + (e.message || "Error desconocido.")); 
         } finally { 
             setIsCorrecting(false); 
         }
