@@ -28,7 +28,6 @@ const LISTENING_TOPICS = [
     'benefits of bilingualism',
 ];
 
-// AQUÍ ESTÁ LA NUEVA INSTRUCCIÓN PARA QUE NO TE INTERRUMPA
 const CONVERSATION_TUTOR_SYSTEM_INSTRUCTION = `You are a friendly, concise English language tutor. The user is a {LEVEL} level English learner.
 Topic: "{TOPIC}".
 
@@ -154,6 +153,9 @@ export default function App() {
     const currentInputTranscription = useRef<string>('');
     const currentOutputTranscription = useRef<string>('');
 
+    // NUEVO: Rastreador para pausar y reanudar el audio del Listening correctamente
+    const listeningPlaybackRef = useRef<{ source: AudioBufferSourceNode | null, startTime: number, pausedAt: number }>({ source: null, startTime: 0, pausedAt: 0 });
+
     // Auto-scroll logic
     const scrollToBottom = useCallback(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -225,7 +227,6 @@ export default function App() {
             audioContextsRef.current.input = inCtx;
 
             sessionPromiseRef.current = ai.live.connect({
-                // NUEVO MODELO DE TU LISTA: Mucho más rápido y con soporte de audio
                 model: 'gemini-3-flash-preview',
                 config: {
                     responseModalities: [Modality.AUDIO],
@@ -318,7 +319,6 @@ export default function App() {
             }
 
             const res = await ai.models.generateContent({
-                // NUEVO MODELO DE TU LISTA: El cerebro más potente para corregir gramática
                 model: 'gemini-3.1-pro-preview',
                 contents: { parts },
                 config: {
@@ -346,7 +346,12 @@ export default function App() {
                     }
                 }
             });
-            setWritingResult(JSON.parse(res.text));
+            
+            // NUEVO: La escoba que limpia el texto para que la aplicación no se rompa al leer el resultado
+            const rawText = res.text || "";
+            const cleanJson = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+            setWritingResult(JSON.parse(cleanJson));
+
         } catch (e) { alert("Correction failed."); } finally { setIsCorrecting(false); }
     };
 
@@ -355,11 +360,15 @@ export default function App() {
         
         if (!apiKey) return;
         setIsGenerating(true); setExercise(null); setListeningAudioBuffer(null);
+        
+        // Resetear el rastreador de audio al generar un nuevo ejercicio
+        listeningPlaybackRef.current = { source: null, startTime: 0, pausedAt: 0 };
+        setIsListeningAudioPlaying(false);
+
         try {
             const ai = new GoogleGenAI({ apiKey });
             const topic = LISTENING_TOPICS[Math.floor(Math.random() * LISTENING_TOPICS.length)];
             const res = await ai.models.generateContent({
-                // NUEVO MODELO DE TU LISTA: Para crear el texto del ejercicio
                 model: 'gemini-3-flash-preview',
                 contents: `Create listening exercise for level ${listeningLevel} on ${topic}`,
                 config: {
@@ -378,7 +387,6 @@ export default function App() {
             setExercise(json);
 
             const tts = await ai.models.generateContent({
-                // NUEVO MODELO DE TU LISTA: Para generar las voces (TTS)
                 model: "gemini-3-flash-preview",
                 contents: [{ parts: [{ text: json.transcript }] }],
                 config: {
@@ -580,16 +588,38 @@ export default function App() {
                                     </div>
                                     <button
                                         onClick={async () => {
+                                            const ctx = getOutputAudioContext();
                                             if (isListeningAudioPlaying) {
+                                                // NUEVO: Lógica real para pausar el sonido
+                                                if (listeningPlaybackRef.current.source) {
+                                                    listeningPlaybackRef.current.pausedAt = ctx.currentTime - listeningPlaybackRef.current.startTime;
+                                                    listeningPlaybackRef.current.source.stop();
+                                                    listeningPlaybackRef.current.source.disconnect();
+                                                    listeningPlaybackRef.current.source = null;
+                                                }
                                                 setIsListeningAudioPlaying(false);
                                             } else if (listeningAudioBuffer) {
-                                                const ctx = getOutputAudioContext();
+                                                // NUEVO: Lógica real para reanudar el sonido donde se quedó
                                                 if (ctx.state === 'suspended') await ctx.resume();
                                                 const s = ctx.createBufferSource();
                                                 s.buffer = listeningAudioBuffer;
                                                 s.connect(ctx.destination);
-                                                s.onended = () => setIsListeningAudioPlaying(false);
-                                                s.start();
+                                                
+                                                s.onended = () => {
+                                                    // Solo resetear el botón si terminó naturalmente
+                                                    if (listeningPlaybackRef.current.source === s) {
+                                                        setIsListeningAudioPlaying(false);
+                                                        listeningPlaybackRef.current.pausedAt = 0;
+                                                        listeningPlaybackRef.current.source = null;
+                                                    }
+                                                };
+                                                
+                                                const offset = listeningPlaybackRef.current.pausedAt % listeningAudioBuffer.duration;
+                                                s.start(0, offset);
+                                                
+                                                listeningPlaybackRef.current.startTime = ctx.currentTime - offset;
+                                                listeningPlaybackRef.current.source = s;
+                                                
                                                 setIsListeningAudioPlaying(true);
                                             }
                                         }}
