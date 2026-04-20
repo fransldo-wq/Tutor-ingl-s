@@ -48,29 +48,6 @@ Example:
 User: "I study English for 2 years."
 Tutor: "Correction: I have been studying English for two years.||That's a great milestone! Two years is usually when students start feeling more confident. What do you find most difficult about learning it?"`;
 
-const LISTENING_SYSTEM_INSTRUCTION = `Generate an engaging listening comprehension exercise for level {LEVEL}.
-1. Create a realistic dialogue (250-400 words).
-2. Use exactly two speakers with tags like [Alice]: and [Bob]:.
-3. Provide 3-4 multiple-choice questions.`;
-
-const WRITING_CORRECTOR_SYSTEM_INSTRUCTION = `You are an expert English examiner for Cambridge Assessment. Correct the user's text based on their target level ({LEVEL}).
-
-Assessment Criteria:
-1. Content: Did they cover all points?
-2. Communicative Achievement: Is the tone appropriate?
-3. Organization: Is there a logical flow?
-4. Language: Accuracy and range of grammar and vocabulary.
-
-Output format (JSON):
-{
-  "score": "A score from 1-5 (Cambridge scale)",
-  "summary": "Overall feedback",
-  "corrections": [
-    {"original": "...", "improved": "...", "explanation": "..."}
-  ],
-  "improvedVersion": "The full text rewritten professionally at {LEVEL} level."
-}`;
-
 function createPcmBlob(data: Float32Array): Blob {
     const l = data.length;
     const int16 = new Int16Array(l);
@@ -125,7 +102,6 @@ async function processImageFile(file: File): Promise<{data: string, type: string
 }
 
 // --- UI Components ---
-// RECUPERADO: Textos completos de los niveles
 const LevelSelector: React.FC<{
     level: string;
     setLevel: (level: string) => void;
@@ -153,7 +129,6 @@ const LevelSelector: React.FC<{
 export default function App() {
     const [mode, setMode] = useState<AppMode>(AppMode.CONVERSATION);
 
-    // RECUPERADO: Estados independientes para cada modo
     // Conversation state
     const [topic, setTopic] = useState<string>('');
     const [level, setLevel] = useState<string>('B1');
@@ -376,48 +351,49 @@ export default function App() {
 
         try {
             const ai = new GoogleGenAI({ apiKey });
-            const parts: any[] = [{ text: `Correct this English text based on level ${writingLevel}. Consider Cambridge criteria.` }];
-            if (writingInput) parts.push({ text: `Content: ${writingInput}` });
+            
+            // MÉTODO A PRUEBA DE BALAS: Pasamos toda la configuración por texto
+            // Esto evita los errores 404 de API experimentales
+            const promptStr = `You are an expert English examiner for Cambridge Assessment. Correct the user's text based on their target level (${writingLevel}).
+
+Assessment Criteria:
+1. Content: Did they cover all points?
+2. Communicative Achievement: Is the tone appropriate?
+3. Organization: Is there a logical flow?
+4. Language: Accuracy and range of grammar and vocabulary.
+
+CRITICAL INSTRUCTION: You MUST return ONLY a raw JSON object with no markdown formatting, no code blocks, and no extra text. Use this exact structure:
+{
+  "score": "A score from 1-5 (Cambridge scale)",
+  "summary": "Overall feedback",
+  "corrections": [
+    {"original": "incorrect phrase", "improved": "corrected phrase", "explanation": "why"}
+  ],
+  "improvedVersion": "The full text rewritten professionally at ${writingLevel} level."
+}`;
+
+            const parts: any[] = [{ text: promptStr }];
+            if (writingInput) parts.push({ text: `\n\nUSER CONTENT TO EVALUATE:\n${writingInput}` });
             if (uploadedFile) {
                 parts.push({
                     inlineData: { data: uploadedFile.data, mimeType: uploadedFile.type }
                 });
             }
 
+            // Usamos gemini-1.5-pro, el motor más seguro y estable
             const res = await ai.models.generateContent({
-                model: 'gemini-1.5-flash-latest',
-                contents: [{ role: 'user', parts: parts }],
-                config: {
-                    systemInstruction: WRITING_CORRECTOR_SYSTEM_INSTRUCTION.replace('{LEVEL}', writingLevel),
-                    responseMimeType: "application/json",
-                    responseSchema: {
-                        type: Type.OBJECT,
-                        properties: {
-                            score: { type: Type.STRING },
-                            summary: { type: Type.STRING },
-                            corrections: {
-                                type: Type.ARRAY,
-                                items: {
-                                    type: Type.OBJECT,
-                                    properties: {
-                                        original: { type: Type.STRING },
-                                        improved: { type: Type.STRING },
-                                        explanation: { type: Type.STRING }
-                                    }
-                                }
-                            },
-                            improvedVersion: { type: Type.STRING }
-                        },
-                        required: ['score', 'summary', 'corrections', 'improvedVersion']
-                    }
-                }
+                model: 'gemini-1.5-pro',
+                contents: [{ role: 'user', parts: parts }]
             });
             
             const rawText = res.text || "";
             const cleanJson = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
             setWritingResult(JSON.parse(cleanJson));
 
-        } catch (e: any) { alert("Correction failed."); } finally { setIsCorrecting(false); }
+        } catch (e: any) { 
+            console.error("Error completo de API:", e);
+            alert("Error en la corrección: Revisa la consola o asegúrate de tener conexión."); 
+        } finally { setIsCorrecting(false); }
     };
 
     const generateListeningExercise = async () => {
@@ -432,22 +408,27 @@ export default function App() {
         try {
             const ai = new GoogleGenAI({ apiKey });
             const topic = LISTENING_TOPICS[Math.floor(Math.random() * LISTENING_TOPICS.length)];
+            
+            // MÉTODO A PRUEBA DE BALAS para el Listening
+            const promptStr = `Generate an engaging listening comprehension exercise for level ${listeningLevel} on the topic: ${topic}.
+1. Create a realistic dialogue (250-400 words).
+2. Use exactly two speakers with tags like [Alice]: and [Bob]:.
+3. Provide 3-4 multiple-choice questions.
+
+CRITICAL INSTRUCTION: You MUST return ONLY a raw JSON object with no markdown formatting, no code blocks, and no extra text. Use this exact structure:
+{
+  "transcript": "The full dialogue text...",
+  "questions": "Question 1... A) ... B) ... C) ..."
+}`;
+
             const res = await ai.models.generateContent({
-                model: 'gemini-1.5-flash-latest',
-                contents: `Create listening exercise for level ${listeningLevel} on ${topic}`,
-                config: {
-                    systemInstruction: LISTENING_SYSTEM_INSTRUCTION.replace('{LEVEL}', listeningLevel),
-                    responseMimeType: "application/json",
-                    responseSchema: {
-                        type: Type.OBJECT,
-                        properties: {
-                            transcript: { type: Type.STRING },
-                            questions: { type: Type.STRING }
-                        }
-                    }
-                }
+                model: 'gemini-1.5-pro',
+                contents: promptStr
             });
-            const json = JSON.parse(res.text);
+            
+            const rawText = res.text || "";
+            const cleanJson = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+            const json = JSON.parse(cleanJson);
             setExercise(json);
 
             const tts = await ai.models.generateContent({
@@ -570,7 +551,6 @@ export default function App() {
                                         <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleWritingFile} />
                                     </label>
                                     <div className="flex-grow" />
-                                    {/* RECUPERADO: El level selector propio de Writing */}
                                     <LevelSelector level={writingLevel} setLevel={setWritingLevel} disabled={isCorrecting} />
                                     <button
                                         onClick={runWritingCorrection}
@@ -595,7 +575,6 @@ export default function App() {
                                     <p className="text-slate-400 animate-pulse">Evaluating based on Cambridge Assessment criteria...</p>
                                 </div>
                             )}
-                            {/* RECUPERADO: Todo el bloque de resultados original */}
                             {writingResult && (
                                 <div className="space-y-6 animate-fade-in">
                                     <div className="flex justify-between items-center bg-slate-800 p-4 rounded-2xl border border-slate-700">
@@ -638,7 +617,6 @@ export default function App() {
                                 <h2 className="text-2xl font-bold">Listening Comprehension</h2>
                                 <p className="text-slate-500">Generate a professional dialogue with questions and multi-speaker audio to practice your ear.</p>
                                 <div className="flex items-center justify-center gap-4 py-4">
-                                    {/* RECUPERADO: El level selector propio de Listening */}
                                     <LevelSelector level={listeningLevel} setLevel={setListeningLevel} disabled={isGenerating} />
                                     <button onClick={generateListeningExercise} className="bg-purple-600 px-6 py-2 rounded-xl font-bold">Generate</button>
                                 </div>
@@ -650,7 +628,6 @@ export default function App() {
                                 <p className="text-xl font-medium animate-pulse">Creating your exercise...</p>
                             </div>
                         )}
-                        {/* RECUPERADO: Todo el bloque de ejercicio original */}
                         {exercise && (
                             <div className="space-y-8 max-w-2xl mx-auto w-full">
                                 <div className="bg-slate-800 p-6 rounded-3xl border border-slate-700 flex items-center justify-between">
