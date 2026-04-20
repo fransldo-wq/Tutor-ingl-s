@@ -48,6 +48,29 @@ Example:
 User: "I study English for 2 years."
 Tutor: "Correction: I have been studying English for two years.||That's a great milestone! Two years is usually when students start feeling more confident. What do you find most difficult about learning it?"`;
 
+const LISTENING_SYSTEM_INSTRUCTION = `Generate an engaging listening comprehension exercise for level {LEVEL}.
+1. Create a realistic dialogue (250-400 words).
+2. Use exactly two speakers with tags like [Alice]: and [Bob]:.
+3. Provide 3-4 multiple-choice questions.`;
+
+const WRITING_CORRECTOR_SYSTEM_INSTRUCTION = `You are an expert English examiner for Cambridge Assessment. Correct the user's text based on their target level ({LEVEL}).
+
+Assessment Criteria:
+1. Content: Did they cover all points?
+2. Communicative Achievement: Is the tone appropriate?
+3. Organization: Is there a logical flow?
+4. Language: Accuracy and range of grammar and vocabulary.
+
+Output format (JSON):
+{
+  "score": "A score from 1-5 (Cambridge scale)",
+  "summary": "Overall feedback",
+  "corrections": [
+    {"original": "...", "improved": "...", "explanation": "..."}
+  ],
+  "improvedVersion": "The full text rewritten professionally at {LEVEL} level."
+}`;
+
 function createPcmBlob(data: Float32Array): Blob {
     const l = data.length;
     const int16 = new Int16Array(l);
@@ -60,44 +83,15 @@ function createPcmBlob(data: Float32Array): Blob {
     };
 }
 
-// Compresor de imágenes para evitar colapsos al pegar capturas gigantes
-async function processImageFile(file: File): Promise<{data: string, type: string}> {
+async function fileToBase64(file: File): Promise<string> {
     return new Promise((resolve, reject) => {
-        if (file.type === 'application/pdf') {
-            const reader = new FileReader();
-            reader.readAsDataURL(file);
-            reader.onload = () => resolve({ data: (reader.result as string).split(',')[1], type: file.type });
-            reader.onerror = reject;
-            return;
-        }
-
         const reader = new FileReader();
         reader.readAsDataURL(file);
-        reader.onload = (event) => {
-            const img = new Image();
-            img.src = event.target?.result as string;
-            img.onload = () => {
-                const canvas = document.createElement('canvas');
-                const MAX_WIDTH = 1200;
-                const MAX_HEIGHT = 1200;
-                let width = img.width;
-                let height = img.height;
-
-                if (width > height) {
-                    if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
-                } else {
-                    if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
-                }
-                
-                canvas.width = width;
-                canvas.height = height;
-                const ctx = canvas.getContext('2d');
-                ctx?.drawImage(img, 0, 0, width, height);
-                resolve({ data: canvas.toDataURL('image/jpeg', 0.8).split(',')[1], type: 'image/jpeg' });
-            };
-            img.onerror = reject;
+        reader.onload = () => {
+            const base64String = (reader.result as string).split(',')[1];
+            resolve(base64String);
         };
-        reader.onerror = reject;
+        reader.onerror = (error) => reject(error);
     });
 }
 
@@ -160,8 +154,6 @@ export default function App() {
 
     const currentInputTranscription = useRef<string>('');
     const currentOutputTranscription = useRef<string>('');
-
-    // Rastreador para el botón Play/Stop del Listening
     const listeningPlaybackRef = useRef<{ source: AudioBufferSourceNode | null, startTime: number, pausedAt: number }>({ source: null, startTime: 0, pausedAt: 0 });
 
     const scrollToBottom = useCallback(() => {
@@ -304,96 +296,61 @@ export default function App() {
     const handleWritingFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
-        try {
-            const processed = await processImageFile(file);
-            setUploadedFile(processed);
-        } catch (err) { console.error("Error al procesar archivo:", err); }
-    };
-
-    const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-        const pastedText = e.clipboardData.getData('text');
-        if (pastedText && pastedText.startsWith('data:image')) {
-            e.preventDefault();
-            const type = pastedText.split(';')[0].split(':')[1];
-            const data = pastedText.split(',')[1];
-            setUploadedFile({ data, type });
-            setTimeout(() => setWritingInput(''), 50);
-            return;
-        }
-
-        const items = e.clipboardData.items;
-        for (let i = 0; i < items.length; i++) {
-            if (items[i].type.indexOf('image') !== -1) {
-                const blob = items[i].getAsFile();
-                if (blob) {
-                    e.preventDefault();
-                    try {
-                        const processed = await processImageFile(blob as File);
-                        setUploadedFile(processed);
-                    } catch (err) { console.error("Error procesando captura:", err); }
-                }
-            }
-        }
+        const base64 = await fileToBase64(file);
+        setUploadedFile({ data: base64, type: file.type });
     };
 
     const runWritingCorrection = async () => {
         const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
         
-        if (writingInput.length > 20000 && writingInput.includes('base64')) {
-            alert("⚠️ El recuadro contiene el código de una imagen, no un texto normal. Por favor, bóórralo entero y vuelve a pegarlo.");
-            setWritingInput('');
-            return;
-        }
-
         if (!apiKey || (!writingInput.trim() && !uploadedFile)) return;
         setIsCorrecting(true);
         setWritingResult(null);
 
         try {
             const ai = new GoogleGenAI({ apiKey });
-            
-            // MÉTODO A PRUEBA DE BALAS: Pasamos toda la configuración por texto
-            // Esto evita los errores 404 de API experimentales
-            const promptStr = `You are an expert English examiner for Cambridge Assessment. Correct the user's text based on their target level (${writingLevel}).
-
-Assessment Criteria:
-1. Content: Did they cover all points?
-2. Communicative Achievement: Is the tone appropriate?
-3. Organization: Is there a logical flow?
-4. Language: Accuracy and range of grammar and vocabulary.
-
-CRITICAL INSTRUCTION: You MUST return ONLY a raw JSON object with no markdown formatting, no code blocks, and no extra text. Use this exact structure:
-{
-  "score": "A score from 1-5 (Cambridge scale)",
-  "summary": "Overall feedback",
-  "corrections": [
-    {"original": "incorrect phrase", "improved": "corrected phrase", "explanation": "why"}
-  ],
-  "improvedVersion": "The full text rewritten professionally at ${writingLevel} level."
-}`;
-
-            const parts: any[] = [{ text: promptStr }];
-            if (writingInput) parts.push({ text: `\n\nUSER CONTENT TO EVALUATE:\n${writingInput}` });
+            const parts: any[] = [{ text: `Correct this English text based on level ${writingLevel}. Consider Cambridge criteria.` }];
+            if (writingInput) parts.push({ text: `Content: ${writingInput}` });
             if (uploadedFile) {
                 parts.push({
                     inlineData: { data: uploadedFile.data, mimeType: uploadedFile.type }
                 });
             }
 
-            // Usamos gemini-1.5-pro, el motor más seguro y estable
             const res = await ai.models.generateContent({
-                model: 'gemini-1.5-pro',
-                contents: [{ role: 'user', parts: parts }]
+                model: 'gemini-3-flash-preview',
+                contents: { parts },
+                config: {
+                    systemInstruction: WRITING_CORRECTOR_SYSTEM_INSTRUCTION.replace('{LEVEL}', writingLevel),
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            score: { type: Type.STRING },
+                            summary: { type: Type.STRING },
+                            corrections: {
+                                type: Type.ARRAY,
+                                items: {
+                                    type: Type.OBJECT,
+                                    properties: {
+                                        original: { type: Type.STRING },
+                                        improved: { type: Type.STRING },
+                                        explanation: { type: Type.STRING }
+                                    }
+                                }
+                            },
+                            improvedVersion: { type: Type.STRING }
+                        },
+                        required: ['score', 'summary', 'corrections', 'improvedVersion']
+                    }
+                }
             });
             
             const rawText = res.text || "";
             const cleanJson = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
             setWritingResult(JSON.parse(cleanJson));
 
-        } catch (e: any) { 
-            console.error("Error completo de API:", e);
-            alert("Error en la corrección: Revisa la consola o asegúrate de tener conexión."); 
-        } finally { setIsCorrecting(false); }
+        } catch (e) { alert("Correction failed."); } finally { setIsCorrecting(false); }
     };
 
     const generateListeningExercise = async () => {
@@ -408,27 +365,22 @@ CRITICAL INSTRUCTION: You MUST return ONLY a raw JSON object with no markdown fo
         try {
             const ai = new GoogleGenAI({ apiKey });
             const topic = LISTENING_TOPICS[Math.floor(Math.random() * LISTENING_TOPICS.length)];
-            
-            // MÉTODO A PRUEBA DE BALAS para el Listening
-            const promptStr = `Generate an engaging listening comprehension exercise for level ${listeningLevel} on the topic: ${topic}.
-1. Create a realistic dialogue (250-400 words).
-2. Use exactly two speakers with tags like [Alice]: and [Bob]:.
-3. Provide 3-4 multiple-choice questions.
-
-CRITICAL INSTRUCTION: You MUST return ONLY a raw JSON object with no markdown formatting, no code blocks, and no extra text. Use this exact structure:
-{
-  "transcript": "The full dialogue text...",
-  "questions": "Question 1... A) ... B) ... C) ..."
-}`;
-
             const res = await ai.models.generateContent({
-                model: 'gemini-1.5-pro',
-                contents: promptStr
+                model: 'gemini-3-flash-preview',
+                contents: `Create listening exercise for level ${listeningLevel} on ${topic}`,
+                config: {
+                    systemInstruction: LISTENING_SYSTEM_INSTRUCTION.replace('{LEVEL}', listeningLevel),
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            transcript: { type: Type.STRING },
+                            questions: { type: Type.STRING }
+                        }
+                    }
+                }
             });
-            
-            const rawText = res.text || "";
-            const cleanJson = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
-            const json = JSON.parse(cleanJson);
+            const json = JSON.parse(res.text);
             setExercise(json);
 
             const tts = await ai.models.generateContent({
@@ -537,16 +489,15 @@ CRITICAL INSTRUCTION: You MUST return ONLY a raw JSON object with no markdown fo
                                 </h2>
                                 <textarea
                                     className="flex-grow bg-transparent border-none outline-none resize-none text-lg text-slate-300 placeholder:text-slate-600 leading-relaxed"
-                                    placeholder="Paste your essay or a screenshot here to be evaluated under Cambridge criteria..."
+                                    placeholder="Write your essay here to be evaluated under Cambridge criteria..."
                                     value={writingInput} 
                                     onChange={e => setWritingInput(e.target.value)}
-                                    onPaste={handlePaste}
                                 />
                                 <div className="mt-4 flex items-center gap-4 pt-4 border-t border-slate-800">
                                     <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer hover:text-cyan-400 transition-colors">
                                         <UploadIcon className="w-5 h-5" />
                                         <span className={uploadedFile ? "text-cyan-400 font-bold" : ""}>
-                                            {uploadedFile ? '✓ Image/File Attached' : 'Upload Image/Doc'}
+                                            {uploadedFile ? '✓ File Attached' : 'Upload File'}
                                         </span>
                                         <input type="file" className="hidden" accept="image/*,.pdf" onChange={handleWritingFile} />
                                     </label>
